@@ -1,7 +1,8 @@
 """ChatGPT + Gemini Takeout -> Markdown 통합 파이프라인 CLI.
 
-data/<vendor>/ 에 raw takeout을 넣고 실행하면, data/ 아래 존재가 감지되는 벤더만
-자동으로 골라 result/<vendor>/ 에 마크다운을 생성한다.
+data/<vendor>/ 에 벤더가 준 원본 export를 그대로 넣고 실행하면(zip 그대로든, 미리
+압축을 풀어놨든 상관없음), data/ 아래 존재가 감지되는 벤더만 자동으로 골라
+result/<vendor>/ 에 마크다운을 생성한다.
 
     python run.py                   # 감지되는 벤더 전부
     python run.py --vendor chatgpt  # ChatGPT만
@@ -15,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from common.zip_extract import extract_all_zips  # noqa: E402
 from vendors import base  # noqa: E402
 
 # vendors/ 디렉터리를 스캔해서 벤더 모듈을 자동으로 찾는다 (각 모듈은 discover() 안에서
@@ -40,7 +42,18 @@ def run_vendor(name: str, module: base.VendorModule, dry_run: bool):
     print(f"[{module.VENDOR_LABEL}] data_dir={data_dir}")
     print("=" * 60)
 
-    if not data_dir.exists() or not module.detect(data_dir):
+    if not data_dir.exists():
+        print(f"[건너뜀] {data_dir} 에서 {module.VENDOR_LABEL} takeout 데이터를 찾지 못했습니다.")
+        return None
+
+    if not module.detect(data_dir):
+        # 이미 풀려있는 데이터가 없으면, zip을 그대로 넣었다고 가정하고 풀어본 뒤 다시 감지.
+        # 이미 압축이 풀려있었다면(예전 방식) 여기서 zip이 안 잡히므로 그냥 넘어간다.
+        extracted = extract_all_zips(data_dir)
+        if extracted:
+            print(f"[{module.VENDOR_LABEL}] zip {extracted}개 압축 해제함")
+
+    if not module.detect(data_dir):
         print(f"[건너뜀] {data_dir} 에서 {module.VENDOR_LABEL} takeout 데이터를 찾지 못했습니다.")
         return None
 

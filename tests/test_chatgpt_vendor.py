@@ -1,4 +1,4 @@
-from vendors.chatgpt import _active_branch_nodes, _choose_fallback_leaf
+from vendors.chatgpt import _active_branch_nodes, _choose_fallback_leaf, _find_conversations_dir, detect
 
 
 def _mapping():
@@ -34,3 +34,23 @@ def test_choose_fallback_leaf_picks_max_timestamp_leaf():
 
 def test_choose_fallback_leaf_empty_mapping_returns_none():
     assert _choose_fallback_leaf({}) is None
+
+
+def test_find_conversations_dir_flat(tmp_path):
+    (tmp_path / "conversations.json").write_text("[]", encoding="utf-8")
+    assert _find_conversations_dir(tmp_path) == tmp_path
+    assert detect(tmp_path) is True
+
+
+def test_find_conversations_dir_handles_one_level_of_nesting(tmp_path):
+    # 압축 해제 도구에 따라 zip 내용이 폴더 하나로 한 번 더 감싸질 수 있다.
+    nested = tmp_path / "chatgpt-export-2024"
+    nested.mkdir()
+    (nested / "conversations.json").write_text("[]", encoding="utf-8")
+    assert _find_conversations_dir(tmp_path) == nested
+    assert detect(tmp_path) is True
+
+
+def test_find_conversations_dir_missing_returns_none(tmp_path):
+    assert _find_conversations_dir(tmp_path) is None
+    assert detect(tmp_path) is False

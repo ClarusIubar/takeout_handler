@@ -7,16 +7,29 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
 
 ## 사용법
 
-1. 각 벤더의 Takeout 압축을 풀어서 아래 위치에 그대로 넣는다.
+1. 벤더가 준 원본 zip을 **압축을 풀지 않고 그대로** 아래 위치에 넣는다 (이미 풀어서
+   넣어도 동작함 — 아래 "실제 벤더 export가 어떻게 생겼는지" 참고).
 
    ```
    data/
-   ├── chatgpt/   # ChatGPT Takeout 압축 해제 내용 그대로
-   │              # (conversations.json 또는 conversations-*.json, file_*.dat,
-   │              #  conversation_asset_file_names.json 등)
-   └── gemini/    # Gemini Takeout 압축 해제 내용 그대로
-                  # ("내 활동.html" + 참조된 첨부 미디어 파일들)
+   ├── chatgpt/   # ChatGPT의 Data export zip을 그대로, 또는 압축을 푼 내용
+   └── gemini/    # Google Takeout zip을 그대로, 또는 압축을 푼 내용
    ```
+
+   `run.py`가 각 벤더 폴더에서 필요한 파일을 못 찾으면 그 폴더 안의 `*.zip`을 자동으로
+   그 자리에 풀어본 뒤 다시 찾는다 (`common/zip_extract.py`). Google Takeout처럼 여러
+   파트 zip으로 쪼개져 있으면 전부 같은 폴더에 넣으면 된다 — 파트별로 순서 상관없이
+   풀려서 자연스럽게 합쳐진다. 원본 zip 파일은 지우지 않는다.
+
+   **실제 벤더 export가 어떻게 생겼는지** (압축 풀었을 때 기준):
+   - **ChatGPT** ("설정 → 데이터 제어 → 내보내기"로 받는 zip): 보통 폴더로 안 감싸져
+     있고 `conversations.json`, `chat.html`, `file_*.dat` 등이 압축 최상위에 바로
+     나온다. 압축 해제 도구에 따라 폴더 하나로 한 번 더 감싸일 수도 있는데, 그 경우도
+     재귀 탐색으로 찾으므로 상관없다.
+   - **Gemini** (Google Takeout에서 "Gemini 앱"만 선택해서 받는 zip): 항상
+     `Takeout/<서비스명>/` 처럼 한 겹 이상 감싸져 있고, 그 안에 `내 활동.html`과 첨부
+     미디어 파일들이 나란히 들어있다. `Takeout/` 폴더째로 `data/gemini/`에 넣으면 된다
+     (하위 폴더를 직접 뒤져서 꺼낼 필요 없음).
 
 2. 실행한다.
 
@@ -59,7 +72,8 @@ common/                # 두 벤더가 공유하는 마크다운 안전장치 / 
 ├── markdown_safety.py   # 코드펜스 안전장치
 ├── text.py               # first_sentence / yaml_quote / sanitize_filename / format_callout
 ├── session_markdown.py  # frontmatter + callout 마크다운 조립
-└── attachment_cache.py  # 첨부파일 리졸버 공통 뼈대 (캐싱, dry-run 복사, 집계)
+├── attachment_cache.py  # 첨부파일 리졸버 공통 뼈대 (캐싱, dry-run 복사, 집계)
+└── zip_extract.py        # data/<vendor>/의 *.zip을 그 자리에 압축 해제
 vendors/
 ├── base.py             # 벤더 모듈 인터페이스 계약 + 런타임 검증(validate)
 ├── chatgpt.py           # conversations*.json 트리 파싱 + .dat 첨부파일 복원

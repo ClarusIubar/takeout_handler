@@ -387,7 +387,12 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
     file_size_mb = html_file.stat().st_size / (1024 * 1024)
     print(f"[파싱 시작] {html_file} ({file_size_mb:.1f} MB)")
 
-    resolver = _AttachmentResolver(data_dir, attachments_dir, html_file.name, dry_run)
+    # Google Takeout은 보통 Takeout/<서비스명>/ 처럼 한 겹 이상 감싸져 있고, html이
+    # 참조하는 첨부 미디어 파일들은 data_dir 최상위가 아니라 html과 같은 폴더에
+    # 나란히 들어있다. 최상위 data_dir을 기준으로 찾으면(예전 방식) 실제 export
+    # zip을 그대로 넣었을 때 첨부파일을 전부 놓친다.
+    effective_dir = html_file.parent
+    resolver = _AttachmentResolver(effective_dir, attachments_dir, html_file.name, dry_run)
 
     with open(html_file, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()

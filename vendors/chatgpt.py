@@ -24,8 +24,20 @@ VENDOR_LABEL = "ChatGPT"
 IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
 
 
+def _find_conversations_dir(data_dir: Path):
+    """data_dir 어디든(재귀) conversations*.json이 있으면 그 파일이 들어있는 폴더를
+    반환한다. OpenAI의 export zip은 보통 폴더로 안 감싸져 있어 data_dir 바로 아래
+    나오지만, 압축 해제 도구에 따라 한 겹 더 감싸질 수 있어 재귀로 찾는다. 이후
+    .dat 첨부파일 등도 전부 이 폴더를 기준으로 찾는다(같은 폴더에 나란히 있다고
+    가정 — export zip 내부 구조가 그렇다)."""
+    matches = sorted(data_dir.rglob('conversations*.json'))
+    if not matches:
+        return None
+    return matches[0].parent
+
+
 def detect(data_dir: Path) -> bool:
-    return any(data_dir.glob('conversations*.json'))
+    return _find_conversations_dir(data_dir) is not None
 
 
 # ==========================================
@@ -338,11 +350,16 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
     stats = ConvertStats(vendor_tag=VENDOR_TAG)
     attachments_dir = result_dir / "Attachments"
 
-    asset_name_map = _load_asset_name_map(data_dir)
-    print(f"첨부파일 원본명 매핑: {len(asset_name_map)}개 로드")
-    resolver = _AttachmentResolver(data_dir, attachments_dir, asset_name_map, dry_run)
+    effective_dir = _find_conversations_dir(data_dir)
+    if effective_dir is None:
+        print(f"[오류] {data_dir} 에서 conversations*.json 을 찾지 못했습니다.")
+        return stats
 
-    conversations, load_errors = _load_conversations(data_dir)
+    asset_name_map = _load_asset_name_map(effective_dir)
+    print(f"첨부파일 원본명 매핑: {len(asset_name_map)}개 로드")
+    resolver = _AttachmentResolver(effective_dir, attachments_dir, asset_name_map, dry_run)
+
+    conversations, load_errors = _load_conversations(effective_dir)
     stats.parse_errors += load_errors
     stats.sessions_found = len(conversations)
     print(f"총 대화 {len(conversations)}개 로드 (중복 제거 후)")
