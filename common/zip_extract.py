@@ -10,6 +10,13 @@ import zipfile
 from pathlib import Path
 
 
+def extract_zip(zip_path: Path, dest_dir: Path) -> None:
+    """zip_path 하나를 dest_dir에 압축 해제한다. 원본 zip은 건드리지 않는다."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(dest_dir)
+
+
 def extract_all_zips(data_dir: Path) -> int:
     """data_dir 바로 아래 있는 모든 *.zip을 그 자리에 압축 해제한다.
 
@@ -26,6 +33,5 @@ def extract_all_zips(data_dir: Path) -> int:
         return 0
     zips = sorted(data_dir.glob("*.zip"))
     for zip_path in zips:
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(data_dir)
+        extract_zip(zip_path, data_dir)
     return len(zips)

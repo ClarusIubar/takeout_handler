@@ -42,6 +42,17 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
    파일을 만들지 않고 파싱 결과(세션 수, 스킵 수, 첨부파일 해석 성공/실패 수)만 콘솔에
    출력한다.
 
+   원본을 `data/<vendor>/`로 옮기고 싶지 않으면(예: 다운로드 폴더에 있는 zip을 그대로
+   쓰고 싶을 때) `--input`으로 위치를 직접 지정할 수 있다 — 코드 어디에도 실제 경로가
+   박혀있지 않고 매 실행마다 원하는 곳을 가리킬 수 있다:
+
+   ```bash
+   python run.py --vendor gemini --input "gemini=C:\Users\me\Downloads\takeout.zip"
+   ```
+
+   폴더를 넘기면 그 폴더를 그대로 원본으로 쓰고(아무것도 복사/이동 안 함), `.zip`
+   파일을 넘기면 원본은 그대로 둔 채 내용만 `data/<vendor>/`에 풀어서 쓴다.
+
 3. 결과는 `result/<vendor>/*.md` (+ `result/<vendor>/Attachments/`)에 생성된다. 검토
    후 옵시디언 vault로 옮겨서 쓰면 된다.
 
