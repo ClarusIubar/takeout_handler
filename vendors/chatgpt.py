@@ -1,0 +1,407 @@
+"""ChatGPT Takeout(conversations*.json) -> 마크다운.
+
+gpt_takeout/convert.py 포팅. 대화는 mapping(트리) 구조이므로 current_node에서
+parent를 역추적해 실제 화면에 보였던 브랜치 하나만 채택한다 (재생성된 분기는 버림).
+첨부파일은 conversation_asset_file_names.json으로 원본 파일명을 찾고, 실제 바이트는
+file_<id>.dat 블롭에서 가져와 result_dir/Attachments로 복사한다.
+"""
+
+import hashlib
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+
+from common.markdown_safety import ensure_fences_closed, normalize_fences
+from common.session_markdown import build_session_markdown
+from common.text import first_sentence, sanitize_filename
+from vendors.base import ConvertStats
+
+VENDOR_TAG = "chatgpt"
+VENDOR_LABEL = "ChatGPT"
+
+IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
+
+
+def detect(data_dir: Path) -> bool:
+    return any(data_dir.glob('conversations*.json'))
+
+
+# ==========================================
+# 첨부파일 해석 (.dat 블롭 -> 실제 파일)
+# ==========================================
+
+def _load_asset_name_map(data_dir):
+    """conversation_asset_file_names.json: {".dat 파일명": "원본 파일명"} -> {file_id: 원본 파일명}"""
+    path = data_dir / "conversation_asset_file_names.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except Exception as exc:
+        print(f"[경고] conversation_asset_file_names.json 파싱 실패: {exc}")
+        return {}
+    out = {}
+    if isinstance(data, dict):
+        for dat_name, orig_name in data.items():
+            file_id = dat_name[:-4] if dat_name.lower().endswith('.dat') else dat_name
+            out[file_id] = orig_name
+    return out
+
+
+def _sniff_ext(path):
+    try:
+        head = path.open('rb').read(16)
+    except Exception:
+        return None
+    if head.startswith(b'\x89PNG\r\n\x1a\n'):
+        return '.png'
+    if head.startswith(b'\xff\xd8\xff'):
+        return '.jpg'
+    if head.startswith(b'GIF87a') or head.startswith(b'GIF89a'):
+        return '.gif'
+    if head[:4] == b'RIFF' and head[8:12] == b'WEBP':
+        return '.webp'
+    if head.startswith(b'%PDF'):
+        return '.pdf'
+    return None
+
+
+def _ext_from_name(name):
+    if not name:
+        return None
+    ext = os.path.splitext(name)[1]
+    return ext if ext else None
+
+
+class _AttachmentResolver:
+    def __init__(self, data_dir, attachments_dir, asset_name_map, dry_run):
+        self.data_dir = data_dir
+        self.attachments_dir = attachments_dir
+        self.asset_name_map = asset_name_map
+        self.dry_run = dry_run
+        self._cache = {}
+
+    def resolve(self, file_id, hint_name=None):
+        """.dat 블롭을 확장자 붙여서 attachments_dir로 복사하고
+        (상대링크, 표시용 원본 파일명, 이미지 여부)를 반환. 원본이 없으면 None."""
+        if file_id in self._cache:
+            return self._cache[file_id]
+
+        dat_path = self.data_dir / f"{file_id}.dat"
+        if not dat_path.exists():
+            self._cache[file_id] = None
+            return None
+
+        orig_name = hint_name or self.asset_name_map.get(file_id)
+        ext = _ext_from_name(orig_name) or _sniff_ext(dat_path) or '.bin'
+        dest_name = f"{file_id}{ext}"
+        dest_path = self.attachments_dir / dest_name
+
+        if not self.dry_run:
+            self.attachments_dir.mkdir(parents=True, exist_ok=True)
+            if not dest_path.exists():
+                dest_path.write_bytes(dat_path.read_bytes())
+
+        display_name = orig_name or dest_name
+        is_image = ext.lower() in IMAGE_EXTS
+        result = (f"Attachments/{dest_name}", display_name, is_image)
+        self._cache[file_id] = result
+        return result
+
+    def describe(self, file_id, hint_name=None):
+        resolved = self.resolve(file_id, hint_name=hint_name)
+        if resolved is None:
+            label = hint_name or file_id
+            return f"\n> ⚠️ 첨부파일 누락 (원본 export에 파일 없음): {label}\n"
+        rel_path, display_name, is_image = resolved
+        if is_image:
+            return f"\n![[{rel_path}]]\n"
+        return f"\n📎 [{display_name}]({rel_path})\n"
+
+
+# ==========================================
+# ChatGPT export JSON 파싱
+# ==========================================
+
+def _conversation_id(conv):
+    return str(conv.get('id') or conv.get('conversation_id') or '').strip()
+
+
+def _load_conversations(data_dir):
+    files = sorted(data_dir.glob('conversations*.json'))
+    if not files:
+        print(f"[오류] {data_dir} 에서 conversations*.json 을 찾지 못했습니다.")
+        return []
+
+    raw = []
+    for path in files:
+        try:
+            data = json.loads(path.read_text(encoding='utf-8-sig'))
+        except Exception as exc:
+            print(f"[경고] {path.name} 파싱 실패: {exc}")
+            continue
+        count = len(data) if isinstance(data, list) else 0
+        print(f"  {path.name}: {count}개 대화")
+        if isinstance(data, list):
+            raw.extend(x for x in data if isinstance(x, dict))
+
+    dedup = {}
+    for conv in raw:
+        key = _conversation_id(conv) or hashlib.sha256(
+            json.dumps(conv, sort_keys=True, ensure_ascii=False, default=str).encode('utf-8')
+        ).hexdigest()
+        dedup[key] = conv
+    return list(dedup.values())
+
+
+def _message_timestamp(node):
+    msg = node.get('message') or {}
+    for key in ('create_time', 'update_time'):
+        try:
+            value = msg.get(key)
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            pass
+    return 0.0
+
+
+def _choose_fallback_leaf(mapping):
+    if not mapping:
+        return None
+    leaves = [
+        nid for nid, node in mapping.items()
+        if isinstance(node, dict) and not (node.get('children') or [])
+    ]
+    candidates = leaves or [nid for nid, node in mapping.items() if isinstance(node, dict)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda nid: _message_timestamp(mapping[nid]))
+
+
+def _active_branch_nodes(conv):
+    """대화는 트리(mapping) 구조라 current_node에서 parent를 따라 역추적해서
+    실제 화면에 보였던 브랜치 하나만 골라낸다 (분기된 재생성 답변은 최신 브랜치만 채택)."""
+    mapping = conv.get('mapping') or {}
+    if not isinstance(mapping, dict):
+        return []
+
+    current = conv.get('current_node')
+    if not isinstance(current, str) or current not in mapping:
+        current = _choose_fallback_leaf(mapping)
+    if not current:
+        return []
+
+    chain = []
+    seen = set()
+    node_id = current
+    while node_id and node_id in mapping and node_id not in seen:
+        seen.add(node_id)
+        node = mapping[node_id]
+        if not isinstance(node, dict):
+            break
+        chain.append(node)
+        parent = node.get('parent')
+        node_id = parent if isinstance(parent, str) else None
+
+    chain.reverse()
+    return chain
+
+
+def _visible_message(node):
+    msg = node.get('message')
+    if not isinstance(msg, dict):
+        return None
+
+    role = (msg.get('author') or {}).get('role')
+    if role not in ('user', 'assistant'):
+        return None
+
+    # recipient가 'all'/None이 아니면 도구 호출용 내부 메시지(코드인터프리터 등)라 건너뛴다.
+    recipient = msg.get('recipient')
+    if recipient not in (None, 'all'):
+        return None
+
+    metadata = msg.get('metadata') or {}
+    if isinstance(metadata, dict):
+        if metadata.get('is_visually_hidden_from_conversation') is True:
+            return None
+        if metadata.get('is_hidden') is True:
+            return None
+
+    return msg
+
+
+def _render_part(part, seen_asset_ids, resolver):
+    if isinstance(part, str):
+        return part
+    if not isinstance(part, dict):
+        return ""
+
+    ctype = str(part.get('content_type') or part.get('type') or '').strip()
+
+    if ctype in ('text', 'input_text', 'output_text'):
+        text = part.get('text')
+        return text if isinstance(text, str) else ""
+
+    if ctype == 'image_asset_pointer':
+        pointer = part.get('asset_pointer') or ""
+        file_id = pointer.split('://', 1)[-1] if '://' in pointer else pointer
+        if file_id:
+            seen_asset_ids.add(file_id)
+            return resolver.describe(file_id)
+        return "\n> ⚠️ 첨부파일 누락 (알 수 없는 이미지)\n"
+
+    if ctype in ('audio', 'input_audio'):
+        return "[오디오]"
+
+    if ctype == 'audio_transcription':
+        # Advanced Voice Mode 대화: 실제 발화 내용이 여기 text 필드에 들어있다.
+        text = part.get('text')
+        return text if isinstance(text, str) else ""
+
+    if ctype == 'real_time_user_audio_video_asset_pointer':
+        # 음성/영상 스트림 마커 자체 (녹음 파일 asset). 트랜스크립트는 audio_transcription
+        # 파츠 쪽에 별도로 들어있으므로 여기서는 렌더링할 텍스트가 없다.
+        return ""
+
+    if ctype:
+        # thoughts/reasoning_recap 등 추론 과정 요약: 렌더링할 텍스트가 없으므로 건너뜀
+        return ""
+
+    for key in ('text', 'name', 'title'):
+        value = part.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _render_message(msg, resolver):
+    content = msg.get('content') or {}
+    chunks = []
+    seen_asset_ids = set()
+
+    parts = content.get('parts') if isinstance(content, dict) else None
+    if isinstance(parts, list):
+        chunks.extend(_render_part(p, seen_asset_ids, resolver) for p in parts)
+    else:
+        text = content.get('text') if isinstance(content, dict) else None
+        if isinstance(text, str):
+            chunks.append(text)
+
+    # metadata.attachments는 종종 content.parts의 image_asset_pointer와 같은 파일을
+    # 중복 기재한다 (업로드 기록용). 이미 parts에서 렌더링된 asset은 다시 넣지 않는다.
+    metadata = msg.get('metadata') or {}
+    attachments = metadata.get('attachments') if isinstance(metadata, dict) else None
+    if isinstance(attachments, list):
+        for att in attachments:
+            if not isinstance(att, dict):
+                continue
+            file_id = att.get('id')
+            if isinstance(file_id, str) and file_id in seen_asset_ids:
+                continue
+            name = att.get('name') or att.get('file_name') or att.get('filename')
+            if isinstance(file_id, str) and file_id:
+                chunks.append(resolver.describe(file_id, hint_name=name))
+            elif isinstance(name, str) and name.strip():
+                chunks.append(f"\n> ⚠️ 첨부파일 누락 (원본 export에 파일 없음): {name.strip()}\n")
+
+    text = "\n\n".join(c.strip() for c in chunks if isinstance(c, str) and c.strip())
+    return ensure_fences_closed(normalize_fences(text.strip()))
+
+
+def _local_date(ts):
+    try:
+        if ts is None:
+            raise ValueError
+        return datetime.fromtimestamp(float(ts)).date().isoformat()
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "unknown"
+
+
+def _local_dt_str(ts):
+    try:
+        if ts is None:
+            raise ValueError
+        return datetime.fromtimestamp(float(ts)).strftime('%Y-%m-%d %H:%M:%S')
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "시간 미상"
+
+
+# ==========================================
+# 메인 처리
+# ==========================================
+
+def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
+    stats = ConvertStats(vendor_tag=VENDOR_TAG)
+    attachments_dir = result_dir / "Attachments"
+
+    asset_name_map = _load_asset_name_map(data_dir)
+    print(f"첨부파일 원본명 매핑: {len(asset_name_map)}개 로드")
+    resolver = _AttachmentResolver(data_dir, attachments_dir, asset_name_map, dry_run)
+
+    conversations = _load_conversations(data_dir)
+    stats.sessions_found = len(conversations)
+    print(f"총 대화 {len(conversations)}개 로드 (중복 제거 후)")
+
+    for conv in sorted(
+        conversations,
+        key=lambda c: float(c.get('create_time') or c.get('update_time') or 0),
+    ):
+        cid = _conversation_id(conv)
+        if not cid:
+            stats.empty_skipped += 1
+            continue
+
+        turns = []
+        for node in _active_branch_nodes(conv):
+            msg = _visible_message(node)
+            if not msg:
+                continue
+            role = (msg.get('author') or {}).get('role')
+            text = _render_message(msg, resolver)
+            if not text:
+                continue
+            ts = None
+            for key in ('create_time', 'update_time'):
+                value = msg.get(key)
+                if value is not None:
+                    ts = value
+                    break
+            turns.append({'role': role, 'text': text, 'time_str': _local_dt_str(ts), '_ts': ts})
+
+        if not turns:
+            stats.empty_skipped += 1
+            continue
+
+        title = str(conv.get('title') or '').strip()
+        if not title:
+            first_user_turn = next((t for t in turns if t['role'] == 'user'), turns[0])
+            title = first_sentence(first_user_turn['text'])
+
+        first_ts = conv.get('create_time') or turns[0]['_ts']
+        date_str = _local_date(first_ts)
+        url = f"https://chatgpt.com/c/{cid}"
+
+        md = build_session_markdown(
+            vendor_tag=VENDOR_TAG,
+            vendor_label=VENDOR_LABEL,
+            title=title,
+            session_id=cid,
+            url=url,
+            date_str=date_str,
+            turns=turns,
+        )
+
+        filename = sanitize_filename(cid, fallback="unknown_conversation") + ".md"
+        file_path = result_dir / filename
+
+        if not dry_run:
+            result_dir.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(md, encoding='utf-8')
+        stats.files_written += 1
+
+    stats.attachments_ok = sum(1 for v in resolver._cache.values() if v is not None)
+    stats.attachments_missing = sum(1 for v in resolver._cache.values() if v is None)
+    return stats
