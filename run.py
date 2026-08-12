@@ -15,12 +15,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from vendors import chatgpt, gemini  # noqa: E402
+from vendors import base, chatgpt, gemini  # noqa: E402
 
 VENDORS = {
     "chatgpt": chatgpt,
     "gemini": gemini,
 }
+for _name, _module in VENDORS.items():
+    base.validate(_name, _module)
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -51,6 +53,8 @@ def run_vendor(name, module, dry_run):
           f"파일 {stats.files_written}개 생성, 빈 대화 {stats.empty_skipped}개 스킵")
     print(f"[{module.VENDOR_LABEL}] 첨부파일: 해석 성공 {stats.attachments_ok}개 / "
           f"원본 없음 {stats.attachments_missing}개")
+    if stats.parse_errors:
+        print(f"[{module.VENDOR_LABEL}] ⚠️ 파싱 실패 {stats.parse_errors}건 — 위 로그의 [경고] 확인 필요")
     if dry_run:
         print(f"[{module.VENDOR_LABEL}] --dry-run: 실제 파일은 생성되지 않았습니다.")
     print()
@@ -76,6 +80,13 @@ def main():
     if not ran:
         print("실행된 벤더가 없습니다. data/<vendor>/ 에 raw takeout을 넣었는지 확인하세요.")
         sys.exit(1)
+
+    failed = {name: s for name, s in ran.items() if s.parse_errors > 0}
+    if failed:
+        print("일부 파일이 파싱에 실패했습니다 (부분 성공):")
+        for name, s in failed.items():
+            print(f"  - {name}: {s.parse_errors}건")
+        sys.exit(2)
 
 
 if __name__ == "__main__":

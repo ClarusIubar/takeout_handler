@@ -12,6 +12,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from common.attachment_cache import BaseAttachmentResolver
 from common.markdown_safety import ensure_fences_closed, normalize_fences
 from common.session_markdown import build_session_markdown
 from common.text import first_sentence, sanitize_filename
@@ -74,13 +75,11 @@ def _ext_from_name(name):
     return ext if ext else None
 
 
-class _AttachmentResolver:
+class _AttachmentResolver(BaseAttachmentResolver):
     def __init__(self, data_dir, attachments_dir, asset_name_map, dry_run):
+        super().__init__(attachments_dir, dry_run)
         self.data_dir = data_dir
-        self.attachments_dir = attachments_dir
         self.asset_name_map = asset_name_map
-        self.dry_run = dry_run
-        self._cache = {}
 
     def resolve(self, file_id, hint_name=None):
         """.dat 블롭을 확장자 붙여서 attachments_dir로 복사하고
@@ -98,10 +97,7 @@ class _AttachmentResolver:
         dest_name = f"{file_id}{ext}"
         dest_path = self.attachments_dir / dest_name
 
-        if not self.dry_run:
-            self.attachments_dir.mkdir(parents=True, exist_ok=True)
-            if not dest_path.exists():
-                dest_path.write_bytes(dat_path.read_bytes())
+        self._guarded_copy(dest_path, lambda: dest_path.write_bytes(dat_path.read_bytes()))
 
         display_name = orig_name or dest_name
         is_image = ext.lower() in IMAGE_EXTS
@@ -129,17 +125,22 @@ def _conversation_id(conv):
 
 
 def _load_conversations(data_dir):
+    """(대화 리스트, 파싱 실패한 파일 수)를 반환한다. 파일 하나가 깨져 있어도
+    (예: 다운로드 중단된 export) 나머지는 계속 처리하되, 실패 건수는 상위로
+    올려서 run.py가 '조용한 부분 실패'를 종료 코드로 알 수 있게 한다."""
     files = sorted(data_dir.glob('conversations*.json'))
     if not files:
         print(f"[오류] {data_dir} 에서 conversations*.json 을 찾지 못했습니다.")
-        return []
+        return [], 0
 
     raw = []
+    errors = 0
     for path in files:
         try:
             data = json.loads(path.read_text(encoding='utf-8-sig'))
         except Exception as exc:
             print(f"[경고] {path.name} 파싱 실패: {exc}")
+            errors += 1
             continue
         count = len(data) if isinstance(data, list) else 0
         print(f"  {path.name}: {count}개 대화")
@@ -152,7 +153,7 @@ def _load_conversations(data_dir):
             json.dumps(conv, sort_keys=True, ensure_ascii=False, default=str).encode('utf-8')
         ).hexdigest()
         dedup[key] = conv
-    return list(dedup.values())
+    return list(dedup.values()), errors
 
 
 def _message_timestamp(node):
@@ -341,7 +342,8 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
     print(f"첨부파일 원본명 매핑: {len(asset_name_map)}개 로드")
     resolver = _AttachmentResolver(data_dir, attachments_dir, asset_name_map, dry_run)
 
-    conversations = _load_conversations(data_dir)
+    conversations, load_errors = _load_conversations(data_dir)
+    stats.parse_errors += load_errors
     stats.sessions_found = len(conversations)
     print(f"총 대화 {len(conversations)}개 로드 (중복 제거 후)")
 
@@ -402,6 +404,5 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
             file_path.write_text(md, encoding='utf-8')
         stats.files_written += 1
 
-    stats.attachments_ok = sum(1 for v in resolver._cache.values() if v is not None)
-    stats.attachments_missing = sum(1 for v in resolver._cache.values() if v is None)
+    stats.attachments_ok, stats.attachments_missing = resolver.stats()
     return stats

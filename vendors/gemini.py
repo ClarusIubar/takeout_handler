@@ -16,6 +16,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 
+from common.attachment_cache import BaseAttachmentResolver
 from common.markdown_safety import ensure_fences_closed, make_fence, normalize_fences
 from common.session_markdown import build_session_markdown
 from common.text import first_sentence, sanitize_filename
@@ -53,16 +54,14 @@ def _is_remote_url(s):
     return bool(re.match(r'^https?://', (s or '').strip(), re.IGNORECASE))
 
 
-class _AttachmentResolver:
+class _AttachmentResolver(BaseAttachmentResolver):
     """href/src(원본 그대로, percent-encoded일 수 있음) -> (rel_path, display_name, is_embeddable).
     basename 기준으로 캐시되어 같은 파일이 여러 턴/세션에서 참조돼도 한 번만 복사된다."""
 
     def __init__(self, data_dir, attachments_dir, activity_html_basename, dry_run):
+        super().__init__(attachments_dir, dry_run)
         self.data_dir = data_dir
-        self.attachments_dir = attachments_dir
         self.activity_html_basename = activity_html_basename
-        self.dry_run = dry_run
-        self._cache = {}
 
     def resolve(self, raw_ref, hint_display_name=None):
         if not raw_ref or _is_remote_url(raw_ref):
@@ -98,10 +97,7 @@ class _AttachmentResolver:
         dest_name = basename if ext else (basename + ".md")  # 확장자 없는 Canvas 문서 -> .md
         dest_path = self.attachments_dir / dest_name
 
-        if not self.dry_run:
-            self.attachments_dir.mkdir(parents=True, exist_ok=True)
-            if not dest_path.exists():
-                shutil.copy2(src_path, dest_path)
+        self._guarded_copy(dest_path, lambda: shutil.copy2(src_path, dest_path))
 
         display_name = hint_display_name or basename
         is_embeddable = ext.lower() in EMBED_EXTS  # 확장자 없는 .md-fallback은 임베드하지 않음
@@ -462,9 +458,5 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
             file_path.write_text(md, encoding='utf-8')
         stats.files_written += 1
 
-    # href 확장자 불일치 fallback 때문에 하나의 실제 파일이 두 개의 키(원본/실제 basename)로
-    # 캐시될 수 있으므로, 성공 건은 rel_path 기준으로, 실패 건은 키 개수 기준으로 센다.
-    resolved_paths = {v[0] for v in resolver._cache.values() if v is not None}
-    stats.attachments_ok = len(resolved_paths)
-    stats.attachments_missing = sum(1 for v in resolver._cache.values() if v is None)
+    stats.attachments_ok, stats.attachments_missing = resolver.stats()
     return stats
