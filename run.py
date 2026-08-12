@@ -15,14 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from vendors import base, chatgpt, gemini  # noqa: E402
+from vendors import base  # noqa: E402
 
-VENDORS = {
-    "chatgpt": chatgpt,
-    "gemini": gemini,
-}
-for _name, _module in VENDORS.items():
-    base.validate(_name, _module)
+# vendors/ 디렉터리를 스캔해서 벤더 모듈을 자동으로 찾는다 (각 모듈은 discover() 안에서
+# base.validate()로 인터페이스 검증까지 끝낸 상태). 새 벤더를 추가할 때 여기를 고칠
+# 필요 없이 vendors/<name>.py 파일만 놓으면 된다.
+VENDORS = base.discover()
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -34,7 +32,7 @@ except Exception:
     pass
 
 
-def run_vendor(name, module, dry_run):
+def run_vendor(name: str, module: base.VendorModule, dry_run: bool):
     data_dir = DATA_DIR / name
     result_dir = RESULT_DIR / name
 
