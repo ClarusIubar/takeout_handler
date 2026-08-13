@@ -1,4 +1,14 @@
+import json
+import re
+
 from common.session_markdown import build_session_markdown, extract_content_hash
+
+_TURN_COMMENT_RE = re.compile(r'<!-- turn: (\{.*?\}) -->')
+
+
+def _turn_comments(md):
+    """본문에 심긴 <!-- turn: {...} --> 주석을 등장 순서대로 파싱해서 dict 리스트로 반환."""
+    return [json.loads(m.group(1)) for m in _TURN_COMMENT_RE.finditer(md)]
 
 
 def _turns():
@@ -91,3 +101,92 @@ def test_extract_content_hash_reads_value_back():
 
 def test_extract_content_hash_missing_field_returns_none():
     assert extract_content_hash("---\ntitle: x\n---\nbody") is None
+
+
+def test_turn_comment_appears_immediately_before_its_callout():
+    md, _hash = _build(_turns())
+    comment_idx = md.index("<!-- turn:")
+    question_idx = md.index("[!question]")
+    assert comment_idx < question_idx
+    # 주석과 콜아웃 사이에 다른 내용이 끼어들지 않는다(바로 다음 줄).
+    assert md[comment_idx:question_idx].count("\n") == 1
+
+
+def test_turn_comment_normal_user_assistant_pair():
+    md, _hash = _build(_turns())
+    comments = _turn_comments(md)
+
+    assert comments == [
+        {"turn_index": 0, "role": "user", "parent_turn_index": None, "has_attachment": False},
+        {"turn_index": 1, "role": "assistant", "parent_turn_index": 0, "has_attachment": False},
+    ]
+
+
+def test_turn_comment_consecutive_user_turns_have_no_parent():
+    # ChatGPT는 응답 없이 연속으로 사용자 메시지가 이어질 수 있다 — 각 user turn은
+    # 그 자체로 새 turn window의 시작이라 parent_turn_index가 없어야 한다.
+    turns = [
+        {"role": "user", "text": "질문1", "time_str": "t1"},
+        {"role": "user", "text": "질문2", "time_str": "t2"},
+    ]
+    md, _hash = _build(turns)
+    comments = _turn_comments(md)
+
+    assert comments[0]["parent_turn_index"] is None
+    assert comments[1]["parent_turn_index"] is None
+    assert comments[0]["role"] == comments[1]["role"] == "user"
+
+
+def test_turn_comment_answer_only_question_has_no_following_assistant():
+    # 응답 없는 마지막 질문: turns 리스트가 user 하나로 끝나도 그 자체로는 문제없이
+    # parent_turn_index=None인 질문-only 턴으로 남는다.
+    turns = [{"role": "user", "text": "답 없는 질문", "time_str": "t1"}]
+    md, _hash = _build(turns)
+    comments = _turn_comments(md)
+
+    assert comments == [
+        {"turn_index": 0, "role": "user", "parent_turn_index": None, "has_attachment": False},
+    ]
+
+
+def test_turn_comment_marks_has_attachment_from_after_md():
+    turns = [
+        {"role": "user", "text": "질문", "time_str": "t", "after_md": "> 첨부파일\n\n"},
+        {"role": "assistant", "text": "답변", "time_str": "t"},
+    ]
+    md, _hash = _build(turns)
+    comments = _turn_comments(md)
+
+    assert comments[0]["has_attachment"] is True
+    assert comments[1]["has_attachment"] is False
+
+
+def test_turn_comment_multiple_assistant_turns_share_same_parent():
+    # 벤더 파서가 (드물게) 한 user turn 뒤에 assistant turn을 여러 개 넣더라도, 다음
+    # user turn을 만나기 전까지는 전부 같은 parent_turn_index를 가리켜야 한다.
+    turns = [
+        {"role": "user", "text": "질문", "time_str": "t0"},
+        {"role": "assistant", "text": "답변1", "time_str": "t1"},
+        {"role": "assistant", "text": "답변2", "time_str": "t2"},
+    ]
+    md, _hash = _build(turns)
+    comments = _turn_comments(md)
+
+    assert comments[1]["parent_turn_index"] == 0
+    assert comments[2]["parent_turn_index"] == 0
+
+
+def test_turn_comment_included_in_content_hash():
+    # 주석도 본문 바이트의 일부이므로, turn 구성이 바뀌면(예: has_attachment 여부만
+    # 달라져도) content_hash가 달라져야 한다.
+    turns_no_attachment = [
+        {"role": "user", "text": "질문", "time_str": "t"},
+        {"role": "assistant", "text": "답변", "time_str": "t"},
+    ]
+    turns_with_attachment = [
+        {"role": "user", "text": "질문", "time_str": "t", "after_md": "> 첨부\n\n"},
+        {"role": "assistant", "text": "답변", "time_str": "t"},
+    ]
+    _md1, hash1 = _build(turns_no_attachment)
+    _md2, hash2 = _build(turns_with_attachment)
+    assert hash1 != hash2

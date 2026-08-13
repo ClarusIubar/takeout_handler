@@ -10,14 +10,32 @@ frontmatter의 content_hash는 upsert 판단(common/upsert.py)에 쓰인다 — 
 만든 본문"과 "지난번에 이 렌더러가 만들어 저장해둔 본문"을 비교한다. 같은 turns/title이
 들어가면 build_session_markdown()은 항상 같은 본문을 만드는 순수 함수이므로, 본문 해시
 자체가 소스 상태의 지문 역할을 한다.
+
+각 callout 바로 앞에는 turn_index/role/parent_turn_index/has_attachment를 담은 HTML
+주석을 심는다. RAG 청킹 파이프라인이 "이게 질문인지 답변인지", "이 답변이 어느 질문에
+대한 것인지"를 callout 문법([!question] vs [!tip])이나 "다음 질문 직전까지" 같은 순서
+휴리스틱으로 추론하지 않고 바로 읽어갈 수 있게 하기 위함이다(ChatGPT는 연속 사용자
+메시지나 응답 없는 마지막 질문이 가능해서 순서 휴리스틱만으로는 안전하지 않다). HTML
+주석은 Obsidian 미리보기에는 안 보이므로 사용자가 보는 화면에는 영향이 없다.
 """
 
 import hashlib
+import json
 import re
 
 from .text import format_callout, yaml_quote
 
 _CONTENT_HASH_LINE_RE = re.compile(r'^content_hash:\s*(\S+)\s*$', re.MULTILINE)
+
+
+def _turn_comment(turn_index, role, parent_turn_index, has_attachment):
+    payload = {
+        "turn_index": turn_index,
+        "role": role,
+        "parent_turn_index": parent_turn_index,
+        "has_attachment": has_attachment,
+    }
+    return f"<!-- turn: {json.dumps(payload, ensure_ascii=False)} -->\n"
 
 
 def build_session_markdown(vendor_tag, vendor_label, title, session_id, url, date_str, turns,
@@ -31,10 +49,16 @@ def build_session_markdown(vendor_tag, vendor_label, title, session_id, url, dat
         turns_count = len(turns)
 
     body = f"# {title}\n\n"
-    for turn in turns:
+    last_user_index = None
+    for turn_index, turn in enumerate(turns):
         time_str = turn['time_str']
-        if turn['role'] == 'user':
+        role = turn['role']
+        parent_turn_index = None if role == 'user' else last_user_index
+        has_attachment = bool(turn.get('after_md'))
+        body += _turn_comment(turn_index, role, parent_turn_index, has_attachment)
+        if role == 'user':
             body += f"> [!question]- User ({time_str})\n{format_callout(turn['text'])}\n\n"
+            last_user_index = turn_index
         else:
             body += f"> [!tip]- {vendor_label} ({time_str})\n{format_callout(turn['text'])}\n\n"
         after_md = turn.get('after_md')

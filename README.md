@@ -106,9 +106,18 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
 ## 출력 형식
 
 세션(대화) 1개당 마크다운 노트 1개. frontmatter에 `title`/`session_id`/`url`/`date`/
-`turns_count`/`tags`를 담고, 본문은 `> [!question]- User (...)` / `> [!tip]- <Vendor>
-(...)` 콜아웃으로 turn을 나열한다. 이미지·파일 첨부는 `Attachments/`로 복사되고
-가능하면 `![[...]]`로 임베드된다.
+`turns_count`/`content_hash`/`tags`를 담고, 본문은 `> [!question]- User (...)` /
+`> [!tip]- <Vendor> (...)` 콜아웃으로 turn을 나열한다. 이미지·파일 첨부는 `Attachments/`로
+복사되고 가능하면 `![[...]]`로 임베드된다.
+
+각 콜아웃 바로 앞에는 `<!-- turn: {"turn_index": 0, "role": "user", "parent_turn_index":
+null, "has_attachment": false} -->` 형태의 HTML 주석이 붙는다. Obsidian 미리보기에는 안
+보이지만, RAG 청킹 파이프라인이 콜아웃 문법(`[!question]` vs `[!tip]`)이나 "다음 질문
+직전까지" 같은 순서 휴리스틱 없이 바로 QA 쌍·세션 경계·첨부 맥락을 읽어갈 수 있다.
+- `parent_turn_index`: 그 답변이 어느 질문(turn_index)에 대한 것인지. 질문 턴은 항상
+  `null`(새 turn window의 시작). 같은 질문에 답변이 여러 턴으로 나뉘어도(실제로 발생함 —
+  긴 응답이 메시지 여러 개로 쪼개지는 경우) 전부 같은 `parent_turn_index`를 가리킨다.
+- `has_attachment`: 그 턴 바로 뒤에 첨부파일 블록이 붙는지 여부.
 
 ## 요구사항
 
