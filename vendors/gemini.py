@@ -17,6 +17,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from common.attachment_cache import BaseAttachmentResolver
+from common.fs_discovery import is_junk_segment
 from common.markdown_safety import ensure_fences_closed, make_fence, normalize_fences
 from common.session_markdown import build_session_markdown
 from common.text import first_sentence, sanitize_filename
@@ -38,12 +39,24 @@ KST_RE = re.compile(
 VOID_TAGS = {'br', 'hr', 'img'}
 
 
-def _find_activity_html(data_dir: Path):
-    for root, _dirs, files in os.walk(data_dir):
+def _find_activity_candidates(data_dir: Path):
+    """data_dir 재귀 탐색으로 '내 활동' html 후보를 전부 찾는다. __MACOSX/ 같은 압축
+    도구 쓰레기 디렉터리는 애초에 내려가지 않는다(os.walk의 dirs를 제자리에서 가지치기).
+    상위(얕은) 경로가 먼저 오도록 정렬."""
+    candidates = []
+    for root, dirs, files in os.walk(data_dir):
+        dirs[:] = [d for d in dirs if not is_junk_segment(d)]
         for file in files:
             if file.endswith('.html') and any(hint in file for hint in ACTIVITY_HTML_BASENAME_HINTS):
-                return Path(root) / file
-    return None
+                candidates.append(Path(root) / file)
+    return sorted(candidates, key=lambda p: len(p.relative_to(data_dir).parts))
+
+
+def _find_activity_html(data_dir: Path):
+    """detect()용 간단 버전 — 후보 중 가장 얕은 것을 반환. 여러 후보가 있을 때의 경고
+    로그는 convert()에서 한 번만 찍는다(detect()가 여러 번 호출될 수 있어서)."""
+    candidates = _find_activity_candidates(data_dir)
+    return candidates[0] if candidates else None
 
 
 def detect(data_dir: Path) -> bool:
@@ -379,10 +392,19 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
     stats = ConvertStats(vendor_tag=VENDOR_TAG)
     attachments_dir = result_dir / "Attachments"
 
-    html_file = _find_activity_html(data_dir)
-    if not html_file:
+    candidates = _find_activity_candidates(data_dir)
+    if not candidates:
         print(f"[오류] {data_dir} 내에서 '내활동.html'(Activity) 파일을 찾지 못했습니다.")
         return stats
+
+    html_file = candidates[0]
+    if len(candidates) > 1:
+        print(f"[경고] 활동 기록 html이 서로 다른 위치 {len(candidates)}곳에서 발견됨 "
+              "(재실행 잔여물이나 압축 중복 가능성):")
+        for c in candidates:
+            print(f"    - {c}")
+        print(f"  -> 가장 상위 경로를 사용: {html_file}")
+        stats.parse_errors += 1
 
     file_size_mb = html_file.stat().st_size / (1024 * 1024)
     print(f"[파싱 시작] {html_file} ({file_size_mb:.1f} MB)")

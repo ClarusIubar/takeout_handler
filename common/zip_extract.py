@@ -7,14 +7,46 @@
 """
 
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+from common.fs_discovery import is_junk_segment
+
+
+def _member_parts(filename: str):
+    """zip 엔트리 이름은 스펙상 '/' 구분자를 쓰지만, 일부 비표준 도구가 '\\'를 쓰기도
+    해서 정규화 후 순수 posix 경로 세그먼트로 쪼갠다."""
+    return PurePosixPath(filename.replace('\\', '/')).parts
+
+
+def _is_safe_member(filename: str) -> bool:
+    """zip slip(경로 탈출) 방어: 절대경로거나 '..' 세그먼트가 있으면 안전하지 않다고
+    본다. extractall()의 암묵적 방어에만 기대지 않고 명시적으로 걸러서, run.py --input
+    으로 사용자가 임의 zip 경로를 넘길 수 있는 경로에서도 목적지 밖으로 못 벗어나게 한다."""
+    normalized = filename.replace('\\', '/')
+    if PurePosixPath(normalized).is_absolute():
+        return False
+    parts = _member_parts(filename)
+    return bool(parts) and '..' not in parts
+
+
+def _is_junk_member(filename: str) -> bool:
+    return any(is_junk_segment(part) for part in _member_parts(filename))
 
 
 def extract_zip(zip_path: Path, dest_dir: Path) -> None:
-    """zip_path 하나를 dest_dir에 압축 해제한다. 원본 zip은 건드리지 않는다."""
+    """zip_path 하나를 dest_dir에 압축 해제한다. 원본 zip은 건드리지 않는다.
+    경로 탈출(zip slip) 시도가 있는 엔트리는 경고와 함께 건너뛰고, __MACOSX/ 등
+    압축 도구가 남기는 쓰레기 엔트리는 조용히 건너뛴다 (애초에 안 써서, 나중에
+    vendors 쪽 탐색 로직이 또 걸러낼 필요가 없게 깨끗한 상태로 만든다)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(dest_dir)
+        for member in zf.infolist():
+            if not _is_safe_member(member.filename):
+                print(f"[경고] {zip_path.name}: 안전하지 않은 경로라 압축 해제에서 건너뜀 - {member.filename}")
+                continue
+            if _is_junk_member(member.filename):
+                continue
+            zf.extract(member, dest_dir)
 
 
 def extract_all_zips(data_dir: Path) -> int:

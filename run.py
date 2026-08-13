@@ -71,15 +71,23 @@ def run_vendor(name: str, module: base.VendorModule, dry_run: bool, data_dir: Pa
         print(f"[건너뜀] {data_dir} 에서 {module.VENDOR_LABEL} takeout 데이터를 찾지 못했습니다.")
         return None
 
+    zip_extracted = 0
     if not module.detect(data_dir):
         # 이미 풀려있는 데이터가 없으면, zip을 그대로 넣었다고 가정하고 풀어본 뒤 다시 감지.
         # 이미 압축이 풀려있었다면(예전 방식) 여기서 zip이 안 잡히므로 그냥 넘어간다.
-        extracted = extract_all_zips(data_dir)
-        if extracted:
-            print(f"[{module.VENDOR_LABEL}] zip {extracted}개 압축 해제함")
+        zip_extracted = extract_all_zips(data_dir)
+        if zip_extracted:
+            print(f"[{module.VENDOR_LABEL}] zip {zip_extracted}개 압축 해제함")
 
     if not module.detect(data_dir):
-        print(f"[건너뜀] {data_dir} 에서 {module.VENDOR_LABEL} takeout 데이터를 찾지 못했습니다.")
+        if zip_extracted:
+            # zip은 풀었는데도 여전히 못 찾음 — "아무것도 없음"과는 원인이 다르므로
+            # (구조가 예상과 다름 등) 사용자가 헷갈리지 않게 구분해서 알린다.
+            print(f"[건너뜀] {data_dir}: zip {zip_extracted}개를 풀었지만 "
+                  f"{module.VENDOR_LABEL} takeout 구조를 여전히 인식하지 못했습니다. "
+                  "README의 실제 export 구조를 확인하세요.")
+        else:
+            print(f"[건너뜀] {data_dir} 에서 {module.VENDOR_LABEL} takeout 데이터를 찾지 못했습니다.")
         return None
 
     stats = module.convert(data_dir, result_dir, dry_run)

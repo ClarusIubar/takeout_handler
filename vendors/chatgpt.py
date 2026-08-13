@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from common.attachment_cache import BaseAttachmentResolver
+from common.fs_discovery import is_junk_path
 from common.markdown_safety import ensure_fences_closed, normalize_fences
 from common.session_markdown import build_session_markdown
 from common.text import first_sentence, sanitize_filename
@@ -22,18 +23,30 @@ VENDOR_TAG = "chatgpt"
 VENDOR_LABEL = "ChatGPT"
 
 IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
+AUDIO_EXTS = {'.wav'}
+PDF_EXTS = {'.pdf'}
+# Gemini 쪽(vendors/gemini.py)과 동일한 임베드 기준: 이미지+음성+PDF. mp4는 인식은 하되
+# (destination 확장자를 올바르게 붙이되) 임베드 대상에는 안 넣는다 — Gemini의 실측 데이터에도
+# mp4 첨부가 있었지만 그쪽도 EMBED_EXTS에서 제외하고 링크로만 표시하는 것으로 이미 검증됨.
+EMBED_EXTS = IMAGE_EXTS | AUDIO_EXTS | PDF_EXTS
+
+
+def _find_conversation_candidates(data_dir: Path):
+    """data_dir 재귀 탐색으로 conversations*.json이 들어있는 서로 다른 부모 디렉터리를
+    전부 찾는다 (macOS 압축이 남기는 __MACOSX/ 같은 쓰레기 경로는 제외 — 안 걸러내면
+    알파벳순 정렬에서 __MACOSX가 정상 폴더보다 앞에 와 엉뚱한 사본이 선택될 수 있다).
+    정상적인 export라면 보통 정확히 1개만 나온다. 상위(얕은) 폴더가 먼저 오도록 정렬."""
+    matches = data_dir.rglob('conversations*.json')
+    parents = {m.parent for m in matches if not is_junk_path(m, data_dir)}
+    return sorted(parents, key=lambda p: len(p.relative_to(data_dir).parts))
 
 
 def _find_conversations_dir(data_dir: Path):
-    """data_dir 어디든(재귀) conversations*.json이 있으면 그 파일이 들어있는 폴더를
-    반환한다. OpenAI의 export zip은 보통 폴더로 안 감싸져 있어 data_dir 바로 아래
-    나오지만, 압축 해제 도구에 따라 한 겹 더 감싸질 수 있어 재귀로 찾는다. 이후
-    .dat 첨부파일 등도 전부 이 폴더를 기준으로 찾는다(같은 폴더에 나란히 있다고
-    가정 — export zip 내부 구조가 그렇다)."""
-    matches = sorted(data_dir.rglob('conversations*.json'))
-    if not matches:
-        return None
-    return matches[0].parent
+    """detect()용 간단 버전 — 후보 중 하나라도 있으면 그중 가장 얕은 폴더를 반환.
+    여러 후보가 있을 때의 경고 로그는 convert()에서 한 번만 찍는다(내부에서 detect()가
+    여러 번 호출될 수 있어 여기서 찍으면 중복 출력됨)."""
+    candidates = _find_conversation_candidates(data_dir)
+    return candidates[0] if candidates else None
 
 
 def detect(data_dir: Path) -> bool:
@@ -75,6 +88,10 @@ def _sniff_ext(path):
         return '.gif'
     if head[:4] == b'RIFF' and head[8:12] == b'WEBP':
         return '.webp'
+    if head[:4] == b'RIFF' and head[8:12] == b'WAVE':
+        return '.wav'
+    if head[4:8] == b'ftyp':
+        return '.mp4'
     if head.startswith(b'%PDF'):
         return '.pdf'
     return None
@@ -112,8 +129,8 @@ class _AttachmentResolver(BaseAttachmentResolver):
         self._guarded_copy(dest_path, lambda: dest_path.write_bytes(dat_path.read_bytes()))
 
         display_name = orig_name or dest_name
-        is_image = ext.lower() in IMAGE_EXTS
-        result = (f"Attachments/{dest_name}", display_name, is_image)
+        is_embeddable = ext.lower() in EMBED_EXTS
+        result = (f"Attachments/{dest_name}", display_name, is_embeddable)
         self._cache[file_id] = result
         return result
 
@@ -122,8 +139,8 @@ class _AttachmentResolver(BaseAttachmentResolver):
         if resolved is None:
             label = hint_name or file_id
             return f"\n> ⚠️ 첨부파일 누락 (원본 export에 파일 없음): {label}\n"
-        rel_path, display_name, is_image = resolved
-        if is_image:
+        rel_path, display_name, is_embeddable = resolved
+        if is_embeddable:
             return f"\n![[{rel_path}]]\n"
         return f"\n📎 [{display_name}]({rel_path})\n"
 
@@ -154,17 +171,27 @@ def _load_conversations(data_dir):
             print(f"[경고] {path.name} 파싱 실패: {exc}")
             errors += 1
             continue
-        count = len(data) if isinstance(data, list) else 0
-        print(f"  {path.name}: {count}개 대화")
         if isinstance(data, list):
+            print(f"  {path.name}: {len(data)}개 대화")
             raw.extend(x for x in data if isinstance(x, dict))
+        else:
+            # 최상위가 list가 아니면 "0개 대화"로 조용히 넘기지 않는다 — 예상과 다른
+            # export 형식(스키마 변경 등)일 수 있으므로 진짜 빈 export와 구분해서 알린다.
+            print(f"[경고] {path.name}의 최상위 타입이 list가 아니라 {type(data).__name__}입니다 "
+                  "— 예상과 다른 export 형식일 수 있습니다.")
+            errors += 1
 
     dedup = {}
+    dup_count = 0
     for conv in raw:
         key = _conversation_id(conv) or hashlib.sha256(
             json.dumps(conv, sort_keys=True, ensure_ascii=False, default=str).encode('utf-8')
         ).hexdigest()
+        if key in dedup:
+            dup_count += 1
         dedup[key] = conv
+    if dup_count:
+        print(f"[경고] 중복 conversation_id {dup_count}건 (마지막으로 처리된 파일 것으로 덮어씀)")
     return list(dedup.values()), errors
 
 
@@ -350,10 +377,19 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
     stats = ConvertStats(vendor_tag=VENDOR_TAG)
     attachments_dir = result_dir / "Attachments"
 
-    effective_dir = _find_conversations_dir(data_dir)
-    if effective_dir is None:
+    candidates = _find_conversation_candidates(data_dir)
+    if not candidates:
         print(f"[오류] {data_dir} 에서 conversations*.json 을 찾지 못했습니다.")
         return stats
+
+    effective_dir = candidates[0]
+    if len(candidates) > 1:
+        print(f"[경고] conversations*.json이 서로 다른 폴더 {len(candidates)}곳에서 발견됨 "
+              "(재실행 잔여물이나 압축 중복 가능성):")
+        for c in candidates:
+            print(f"    - {c}")
+        print(f"  -> 가장 상위 폴더를 사용: {effective_dir}")
+        stats.parse_errors += 1
 
     asset_name_map = _load_asset_name_map(effective_dir)
     print(f"첨부파일 원본명 매핑: {len(asset_name_map)}개 로드")

@@ -1,6 +1,6 @@
 import zipfile
 
-from common.zip_extract import extract_all_zips
+from common.zip_extract import extract_all_zips, extract_zip
 
 
 def test_extract_all_zips_flat(tmp_path):
@@ -49,3 +49,43 @@ def test_extract_all_zips_no_zip_returns_zero(tmp_path):
 
 def test_extract_all_zips_missing_dir_returns_zero(tmp_path):
     assert extract_all_zips(tmp_path / "does-not-exist") == 0
+
+
+def test_extract_zip_rejects_relative_path_traversal_entries(tmp_path, capsys):
+    zpath = tmp_path / "malicious.zip"
+    dest = tmp_path / "dest"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr("../evil.txt", "pwned")
+        zf.writestr("safe.txt", "ok")
+
+    extract_zip(zpath, dest)
+
+    assert not (tmp_path / "evil.txt").exists()  # dest 밖으로 못 나감
+    assert (dest / "safe.txt").read_text(encoding="utf-8") == "ok"
+    assert "안전하지 않은 경로" in capsys.readouterr().out
+
+
+def test_extract_zip_rejects_absolute_path_entries(tmp_path):
+    zpath = tmp_path / "abs.zip"
+    dest = tmp_path / "dest"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr("/etc/evil.txt", "pwned")
+        zf.writestr("safe.txt", "ok")
+
+    extract_zip(zpath, dest)
+
+    assert (dest / "safe.txt").read_text(encoding="utf-8") == "ok"
+    assert not (dest / "etc").exists()
+
+
+def test_extract_zip_skips_macosx_entries(tmp_path):
+    zpath = tmp_path / "mac.zip"
+    dest = tmp_path / "dest"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr("__MACOSX/._conversations.json", b"junk")
+        zf.writestr("conversations.json", "[]")
+
+    extract_zip(zpath, dest)
+
+    assert (dest / "conversations.json").exists()
+    assert not (dest / "__MACOSX").exists()

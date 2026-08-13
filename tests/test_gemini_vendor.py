@@ -3,6 +3,7 @@ from datetime import datetime
 from vendors.gemini import (
     _AttachmentResolver,
     _extract_gemini_session_id,
+    _find_activity_candidates,
     _find_activity_html,
     _find_outer_cell_blocks,
     _parse_kst,
@@ -87,6 +88,20 @@ def test_attachment_resolver_looks_up_files_relative_to_given_dir_not_repo_root(
     assert rel_path == "Attachments/photo.png"
     assert is_embeddable is True
     assert (attachments_dir / "photo.png").read_bytes() == b"fake-image-bytes"
+
+
+def test_find_activity_candidates_ignores_macosx_junk(tmp_path):
+    real = tmp_path / "Takeout" / "Gemini 앱"
+    real.mkdir(parents=True)
+    (real / "내활동.html").write_text("<html></html>", encoding="utf-8")
+
+    junk = tmp_path / "__MACOSX" / "Takeout" / "Gemini 앱"
+    junk.mkdir(parents=True)
+    (junk / "내활동.html").write_text("<html></html>", encoding="utf-8")
+
+    candidates = _find_activity_candidates(tmp_path)
+
+    assert candidates == [real / "내활동.html"]
 
 
 def test_attachment_resolver_returns_none_when_given_wrong_base_dir(tmp_path):
