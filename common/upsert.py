@@ -15,6 +15,22 @@ from pathlib import Path
 
 from common.session_markdown import extract_content_hash
 
+# write_upsert()가 반환하는 action -> ConvertStats 필드명. 두 벤더가 똑같은
+# if/elif/else 3줄을 각자 복붙해서 카운터를 올리고 있었는데, record_action()으로
+# 한 곳에 모았다 — 이 dict가 action 문자열의 유일한 정의처(single source of truth)라
+# write_upsert()의 반환값과 반드시 일치해야 한다.
+_ACTION_FIELD = {
+    "created": "files_created",
+    "updated": "files_updated",
+    "unchanged": "files_unchanged",
+}
+
+
+def record_action(stats, action: str) -> None:
+    """write_upsert()가 반환한 action에 맞춰 stats(ConvertStats)의 해당 카운터를 올린다."""
+    field = _ACTION_FIELD[action]
+    setattr(stats, field, getattr(stats, field) + 1)
+
 
 def write_upsert(file_path: Path, md: str, content_hash: str, dry_run: bool) -> str:
     """"created" / "updated" / "unchanged" 중 하나를 반환한다.

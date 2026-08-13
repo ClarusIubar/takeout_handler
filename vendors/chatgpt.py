@@ -13,23 +13,20 @@ from datetime import datetime
 from pathlib import Path
 
 from common.attachment_cache import BaseAttachmentResolver
-from common.fs_discovery import is_junk_path
+from common.attachment_types import EMBED_EXTS
+from common.fs_discovery import is_junk_path, pick_primary
 from common.markdown_safety import ensure_fences_closed, normalize_fences
 from common.session_markdown import build_session_markdown
 from common.text import first_sentence, sanitize_filename
-from common.upsert import write_upsert
+from common.upsert import record_action, write_upsert
 from vendors.base import ConvertStats
 
 VENDOR_TAG = "chatgpt"
 VENDOR_LABEL = "ChatGPT"
 
-IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
-AUDIO_EXTS = {'.wav'}
-PDF_EXTS = {'.pdf'}
-# Gemini 쪽(vendors/gemini.py)과 동일한 임베드 기준: 이미지+음성+PDF. mp4는 인식은 하되
-# (destination 확장자를 올바르게 붙이되) 임베드 대상에는 안 넣는다 — Gemini의 실측 데이터에도
-# mp4 첨부가 있었지만 그쪽도 EMBED_EXTS에서 제외하고 링크로만 표시하는 것으로 이미 검증됨.
-EMBED_EXTS = IMAGE_EXTS | AUDIO_EXTS | PDF_EXTS
+# mp4는 인식은 하되(destination 확장자를 올바르게 붙이되) EMBED_EXTS(common/attachment_types.py)
+# 임베드 대상에는 안 넣는다 — Gemini의 실측 데이터에도 mp4 첨부가 있었지만 그쪽도 링크로만
+# 표시하는 것으로 이미 검증됨(vendors/gemini.py와 동일 기준 공유).
 
 
 def _find_conversation_candidates(data_dir: Path):
@@ -274,6 +271,47 @@ def _visible_message(node):
     return msg
 
 
+def _render_text_part(part, seen_asset_ids, resolver):
+    text = part.get('text')
+    return text if isinstance(text, str) else ""
+
+
+def _render_image_asset_part(part, seen_asset_ids, resolver):
+    pointer = part.get('asset_pointer') or ""
+    file_id = pointer.split('://', 1)[-1] if '://' in pointer else pointer
+    if file_id:
+        seen_asset_ids.add(file_id)
+        return resolver.describe(file_id)
+    return "\n> ⚠️ 첨부파일 누락 (알 수 없는 이미지)\n"
+
+
+def _render_audio_marker_part(part, seen_asset_ids, resolver):
+    return "[오디오]"
+
+
+def _render_silent_part(part, seen_asset_ids, resolver):
+    # real_time_user_audio_video_asset_pointer: 음성/영상 스트림 마커 자체(녹음 파일
+    # asset). 트랜스크립트는 audio_transcription 파츠 쪽에 별도로 들어있으므로 여기서는
+    # 렌더링할 텍스트가 없다.
+    return ""
+
+
+# content_type -> 렌더러 레지스트리. OpenAI가 새 content_type을 추가해도 여기 한 줄만
+# 추가하면 되고 _render_part()의 분기 로직은 건드릴 필요가 없다 (OCP). 레지스트리에
+# 없는(비어있지 않은) content_type은 _render_part()에서 "알려지지 않은 타입은 렌더링
+# 안 함"으로 처리 — thoughts/reasoning_recap 같은 추론 과정 요약이 여기 해당.
+PART_RENDERERS = {
+    'text': _render_text_part,
+    'input_text': _render_text_part,
+    'output_text': _render_text_part,
+    'audio_transcription': _render_text_part,  # Advanced Voice Mode 실제 발화 텍스트
+    'image_asset_pointer': _render_image_asset_part,
+    'audio': _render_audio_marker_part,
+    'input_audio': _render_audio_marker_part,
+    'real_time_user_audio_video_asset_pointer': _render_silent_part,
+}
+
+
 def _render_part(part, seen_asset_ids, resolver):
     if isinstance(part, str):
         return part
@@ -282,30 +320,9 @@ def _render_part(part, seen_asset_ids, resolver):
 
     ctype = str(part.get('content_type') or part.get('type') or '').strip()
 
-    if ctype in ('text', 'input_text', 'output_text'):
-        text = part.get('text')
-        return text if isinstance(text, str) else ""
-
-    if ctype == 'image_asset_pointer':
-        pointer = part.get('asset_pointer') or ""
-        file_id = pointer.split('://', 1)[-1] if '://' in pointer else pointer
-        if file_id:
-            seen_asset_ids.add(file_id)
-            return resolver.describe(file_id)
-        return "\n> ⚠️ 첨부파일 누락 (알 수 없는 이미지)\n"
-
-    if ctype in ('audio', 'input_audio'):
-        return "[오디오]"
-
-    if ctype == 'audio_transcription':
-        # Advanced Voice Mode 대화: 실제 발화 내용이 여기 text 필드에 들어있다.
-        text = part.get('text')
-        return text if isinstance(text, str) else ""
-
-    if ctype == 'real_time_user_audio_video_asset_pointer':
-        # 음성/영상 스트림 마커 자체 (녹음 파일 asset). 트랜스크립트는 audio_transcription
-        # 파츠 쪽에 별도로 들어있으므로 여기서는 렌더링할 텍스트가 없다.
-        return ""
+    handler = PART_RENDERERS.get(ctype)
+    if handler:
+        return handler(part, seen_asset_ids, resolver)
 
     if ctype:
         # thoughts/reasoning_recap 등 추론 과정 요약: 렌더링할 텍스트가 없으므로 건너뜀
@@ -383,13 +400,8 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
         print(f"[오류] {data_dir} 에서 conversations*.json 을 찾지 못했습니다.")
         return stats
 
-    effective_dir = candidates[0]
-    if len(candidates) > 1:
-        print(f"[경고] conversations*.json이 서로 다른 폴더 {len(candidates)}곳에서 발견됨 "
-              "(재실행 잔여물이나 압축 중복 가능성):")
-        for c in candidates:
-            print(f"    - {c}")
-        print(f"  -> 가장 상위 폴더를 사용: {effective_dir}")
+    effective_dir, ambiguous = pick_primary(candidates, "conversations*.json")
+    if ambiguous:
         stats.parse_errors += 1
 
     asset_name_map = _load_asset_name_map(effective_dir)
@@ -453,13 +465,7 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
         filename = sanitize_filename(cid, fallback="unknown_conversation") + ".md"
         file_path = result_dir / filename
 
-        action = write_upsert(file_path, md, content_hash, dry_run)
-        if action == "created":
-            stats.files_created += 1
-        elif action == "updated":
-            stats.files_updated += 1
-        else:
-            stats.files_unchanged += 1
+        record_action(stats, write_upsert(file_path, md, content_hash, dry_run))
 
     stats.attachments_ok, stats.attachments_missing = resolver.stats()
     return stats

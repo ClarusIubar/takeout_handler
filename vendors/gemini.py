@@ -17,21 +17,18 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from common.attachment_cache import BaseAttachmentResolver
-from common.fs_discovery import is_junk_segment
+from common.attachment_types import EMBED_EXTS, IMAGE_EXTS
+from common.fs_discovery import is_junk_segment, pick_primary
 from common.markdown_safety import ensure_fences_closed, make_fence, normalize_fences
 from common.session_markdown import build_session_markdown
 from common.text import first_sentence, sanitize_filename
-from common.upsert import write_upsert
+from common.upsert import record_action, write_upsert
 from vendors.base import ConvertStats
 
 VENDOR_TAG = "gemini"
 VENDOR_LABEL = "Gemini"
 
 ACTIVITY_HTML_BASENAME_HINTS = ('내활동', '내 활동', 'activity', 'Activity')
-IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
-AUDIO_EXTS = {'.wav'}
-PDF_EXTS = {'.pdf'}
-EMBED_EXTS = IMAGE_EXTS | AUDIO_EXTS | PDF_EXTS  # 이미지+음성+PDF 전부 Obsidian 네이티브 임베드
 
 MARKER = "항목을 검색함"
 KST_RE = re.compile(
@@ -140,64 +137,6 @@ def _parse_kst(text):
         return None
 
 
-def _render(node, resolver):
-    """MiniNode(dict) 또는 str -> 마크다운 문자열"""
-    if isinstance(node, str):
-        return node
-
-    tag = node['tag']
-    children_md = "".join(_render(c, resolver) for c in node['children'])
-
-    if tag in ('pre',):
-        code_text = "".join(_raw_text(c) for c in node['children']).strip('\n')
-        fence = make_fence(code_text)
-        return f"\n{fence}\n{code_text}\n{fence}\n"
-    if tag == 'code':
-        raw = "".join(_raw_text(c) for c in node['children'])
-        if '\n' in raw:
-            code_text = raw.strip('\n')
-            fence = make_fence(code_text)
-            return f"\n{fence}\n{code_text}\n{fence}\n"
-        return f"`{raw}`"
-    if tag == 'p':
-        return f"\n{children_md.strip()}\n\n"
-    if tag == 'br':
-        return "\n"
-    if tag == 'hr':
-        return "\n---\n"
-    if tag == 'img':
-        src = node['attrs'].get('src', '')
-        if not src:
-            return ""
-        if _is_remote_url(src):
-            return f"\n![]({src})\n"
-        resolved = resolver.resolve(src, hint_display_name=node['attrs'].get('alt') or None)
-        if resolved is None:
-            return f"\n⚠️ 이미지 누락 (원본 export에 파일 없음): {src}\n"
-        rel_path, display_name, is_embeddable = resolved
-        if is_embeddable:
-            return f"\n![[{rel_path}]]\n"
-        return f"\n📎 [[{rel_path}|{display_name}]]\n"
-    if tag in ('b', 'strong'):
-        return f"**{children_md}**"
-    if tag in ('i', 'em'):
-        return f"*{children_md}*"
-    if tag == 'li':
-        return f"- {children_md.strip()}\n"
-    if tag in ('ul', 'ol'):
-        return f"\n{children_md}\n"
-    if tag == 'a':
-        href = node['attrs'].get('href', '#')
-        text = children_md.strip() or href
-        return f"[{text}]({href})"
-    if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-        level = int(tag[1])
-        return f"\n{'#' * min(level, 6)} {children_md.strip()}\n"
-    if tag == 'table':
-        return _render_table(node, resolver)
-    return children_md
-
-
 def _raw_text(node):
     if isinstance(node, str):
         return node
@@ -206,7 +145,74 @@ def _raw_text(node):
     return "".join(_raw_text(c) for c in node['children'])
 
 
-def _render_table(node, resolver):
+def _render_pre_or_code_block(node, children_md, resolver):
+    code_text = "".join(_raw_text(c) for c in node['children']).strip('\n')
+    fence = make_fence(code_text)
+    return f"\n{fence}\n{code_text}\n{fence}\n"
+
+
+def _render_code(node, children_md, resolver):
+    raw = "".join(_raw_text(c) for c in node['children'])
+    if '\n' in raw:
+        return _render_pre_or_code_block(node, children_md, resolver)
+    return f"`{raw}`"
+
+
+def _render_p(node, children_md, resolver):
+    return f"\n{children_md.strip()}\n\n"
+
+
+def _render_br(node, children_md, resolver):
+    return "\n"
+
+
+def _render_hr(node, children_md, resolver):
+    return "\n---\n"
+
+
+def _render_img(node, children_md, resolver):
+    src = node['attrs'].get('src', '')
+    if not src:
+        return ""
+    if _is_remote_url(src):
+        return f"\n![]({src})\n"
+    resolved = resolver.resolve(src, hint_display_name=node['attrs'].get('alt') or None)
+    if resolved is None:
+        return f"\n⚠️ 이미지 누락 (원본 export에 파일 없음): {src}\n"
+    rel_path, display_name, is_embeddable = resolved
+    if is_embeddable:
+        return f"\n![[{rel_path}]]\n"
+    return f"\n📎 [[{rel_path}|{display_name}]]\n"
+
+
+def _render_bold(node, children_md, resolver):
+    return f"**{children_md}**"
+
+
+def _render_italic(node, children_md, resolver):
+    return f"*{children_md}*"
+
+
+def _render_li(node, children_md, resolver):
+    return f"- {children_md.strip()}\n"
+
+
+def _render_list_container(node, children_md, resolver):
+    return f"\n{children_md}\n"
+
+
+def _render_a(node, children_md, resolver):
+    href = node['attrs'].get('href', '#')
+    text = children_md.strip() or href
+    return f"[{text}]({href})"
+
+
+def _render_heading(node, children_md, resolver):
+    level = int(node['tag'][1])
+    return f"\n{'#' * min(level, 6)} {children_md.strip()}\n"
+
+
+def _render_table(node, children_md, resolver):
     def find_rows(n):
         out = []
         for c in n['children']:
@@ -228,6 +234,48 @@ def _render_table(node, resolver):
         if i == 0:
             md += "| " + " | ".join(['---'] * len(cells)) + " |\n"
     return md + "\n"
+
+
+# 태그 -> 렌더러 레지스트리. 새 태그를 지원해야 하면 여기 한 줄만 추가하면 되고
+# _render() 자체의 분기 로직은 건드릴 필요가 없다 (OCP). 모든 렌더러는
+# (node, children_md, resolver) -> str로 시그니처를 통일해서 균일하게 호출한다.
+TAG_RENDERERS = {
+    'pre': _render_pre_or_code_block,
+    'code': _render_code,
+    'p': _render_p,
+    'br': _render_br,
+    'hr': _render_hr,
+    'img': _render_img,
+    'b': _render_bold,
+    'strong': _render_bold,
+    'i': _render_italic,
+    'em': _render_italic,
+    'li': _render_li,
+    'ul': _render_list_container,
+    'ol': _render_list_container,
+    'a': _render_a,
+    'h1': _render_heading,
+    'h2': _render_heading,
+    'h3': _render_heading,
+    'h4': _render_heading,
+    'h5': _render_heading,
+    'h6': _render_heading,
+    'table': _render_table,
+}
+
+
+def _render(node, resolver):
+    """MiniNode(dict) 또는 str -> 마크다운 문자열"""
+    if isinstance(node, str):
+        return node
+
+    tag = node['tag']
+    children_md = "".join(_render(c, resolver) for c in node['children'])
+
+    handler = TAG_RENDERERS.get(tag)
+    if handler is None:
+        return children_md
+    return handler(node, children_md, resolver)
 
 
 def _is_target_content_cell(cls):
@@ -398,13 +446,8 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
         print(f"[오류] {data_dir} 내에서 '내활동.html'(Activity) 파일을 찾지 못했습니다.")
         return stats
 
-    html_file = candidates[0]
-    if len(candidates) > 1:
-        print(f"[경고] 활동 기록 html이 서로 다른 위치 {len(candidates)}곳에서 발견됨 "
-              "(재실행 잔여물이나 압축 중복 가능성):")
-        for c in candidates:
-            print(f"    - {c}")
-        print(f"  -> 가장 상위 경로를 사용: {html_file}")
+    html_file, ambiguous = pick_primary(candidates, "활동 기록 html")
+    if ambiguous:
         stats.parse_errors += 1
 
     file_size_mb = html_file.stat().st_size / (1024 * 1024)
@@ -481,13 +524,7 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
         filename = sanitize_filename(sid, fallback="unknown_session") + ".md"
         file_path = result_dir / filename
 
-        action = write_upsert(file_path, md, content_hash, dry_run)
-        if action == "created":
-            stats.files_created += 1
-        elif action == "updated":
-            stats.files_updated += 1
-        else:
-            stats.files_unchanged += 1
+        record_action(stats, write_upsert(file_path, md, content_hash, dry_run))
 
     stats.attachments_ok, stats.attachments_missing = resolver.stats()
     return stats
