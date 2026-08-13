@@ -94,7 +94,8 @@ def run_vendor(name: str, module: base.VendorModule, dry_run: bool, data_dir: Pa
 
     print()
     print(f"[{module.VENDOR_LABEL}] 결과: 세션 {stats.sessions_found}개 중 "
-          f"파일 {stats.files_written}개 생성, 빈 대화 {stats.empty_skipped}개 스킵")
+          f"신규 {stats.files_created}개 / 갱신 {stats.files_updated}개 / "
+          f"변경없음 {stats.files_unchanged}개, 빈 대화 {stats.empty_skipped}개 스킵")
     print(f"[{module.VENDOR_LABEL}] 첨부파일: 해석 성공 {stats.attachments_ok}개 / "
           f"원본 없음 {stats.attachments_missing}개")
     if stats.parse_errors:

@@ -67,7 +67,9 @@ def discover():
 class ConvertStats:
     vendor_tag: str
     sessions_found: int = 0
-    files_written: int = 0
+    files_created: int = 0
+    files_updated: int = 0
+    files_unchanged: int = 0
     empty_skipped: int = 0
     attachments_ok: int = 0
     attachments_missing: int = 0

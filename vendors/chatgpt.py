@@ -17,6 +17,7 @@ from common.fs_discovery import is_junk_path
 from common.markdown_safety import ensure_fences_closed, normalize_fences
 from common.session_markdown import build_session_markdown
 from common.text import first_sentence, sanitize_filename
+from common.upsert import write_upsert
 from vendors.base import ConvertStats
 
 VENDOR_TAG = "chatgpt"
@@ -439,7 +440,7 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
         date_str = _local_date(first_ts)
         url = f"https://chatgpt.com/c/{cid}"
 
-        md = build_session_markdown(
+        md, content_hash = build_session_markdown(
             vendor_tag=VENDOR_TAG,
             vendor_label=VENDOR_LABEL,
             title=title,
@@ -452,10 +453,13 @@ def convert(data_dir: Path, result_dir: Path, dry_run: bool) -> ConvertStats:
         filename = sanitize_filename(cid, fallback="unknown_conversation") + ".md"
         file_path = result_dir / filename
 
-        if not dry_run:
-            result_dir.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(md, encoding='utf-8')
-        stats.files_written += 1
+        action = write_upsert(file_path, md, content_hash, dry_run)
+        if action == "created":
+            stats.files_created += 1
+        elif action == "updated":
+            stats.files_updated += 1
+        else:
+            stats.files_unchanged += 1
 
     stats.attachments_ok, stats.attachments_missing = resolver.stats()
     return stats
