@@ -45,7 +45,11 @@ def write_upsert(file_path: Path, md: str, content_hash: str, dry_run: bool) -> 
     existing_hash = None
     if file_path.exists():
         try:
-            existing_hash = extract_content_hash(file_path.read_text(encoding='utf-8'))
+            # newline='' : 유니버설 개행 변환을 끈다. 대화 원문에 이미 \r\n이 섞여 있는
+            # 경우(Windows에서 작성된 코드를 붙여넣은 등) 기본 텍스트 모드로 읽고 다시
+            # 쓰면 매번 \r가 하나씩 더 붙는 식으로 내용이 조금씩 불어난다 — 파일에 있는
+            # 바이트를 그대로 문자열로 가져와야 다시 쓸 때도 정확히 같은 바이트가 나온다.
+            existing_hash = extract_content_hash(file_path.read_text(encoding='utf-8', newline=''))
         except Exception:
             existing_hash = None  # 손상되거나 인코딩이 다른 파일이면 그냥 새로 씀
 
@@ -55,5 +59,7 @@ def write_upsert(file_path: Path, md: str, content_hash: str, dry_run: bool) -> 
     action = "updated" if file_path.exists() else "created"
     if not dry_run:
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(md, encoding='utf-8')
+        # 위와 같은 이유로 쓸 때도 개행 변환을 끈다 — md 문자열에 있는 그대로(우리가
+        # 만든 \n이든, 원문에 섞여 있던 \r\n이든) 바이트 단위로 그대로 디스크에 남는다.
+        file_path.write_text(md, encoding='utf-8', newline='')
     return action

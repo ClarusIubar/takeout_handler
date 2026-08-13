@@ -1,0 +1,12 @@
+{
+  "takeout_paths": {
+    "chatgpt": "",
+    "gemini": ""
+  },
+  "markdown_output_dir": "result",
+  "obsidian_vault_dir": "",
+  "vault_subdirs": {
+    "chatgpt": "ChatGPT",
+    "gemini": "Gemini"
+  }
+}

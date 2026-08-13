@@ -53,8 +53,47 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
    폴더를 넘기면 그 폴더를 그대로 원본으로 쓰고(아무것도 복사/이동 안 함), `.zip`
    파일을 넘기면 원본은 그대로 둔 채 내용만 `data/<vendor>/`에 풀어서 쓴다.
 
-3. 결과는 `result/<vendor>/*.md` (+ `result/<vendor>/Attachments/`)에 생성된다. 검토
-   후 옵시디언 vault로 옮겨서 쓰면 된다.
+3. 결과는 `result/<vendor>/*.md` (+ `result/<vendor>/Attachments/`)에 생성된다.
+
+4. 검토가 끝났으면 `--publish`로 실제 옵시디언 vault에 반영한다 (아래 "설정" 참고).
+   변환(2번)과 vault 반영(4번)을 분리해둔 이유는, 실제 PKM 저장소에 파일을 쓰는 건
+   되돌리기 까다로운 작업이라 `result/`를 먼저 검토할 수 있게 하기 위함이다.
+
+   ```bash
+   python run.py --publish
+   ```
+
+## 설정 (config.json)
+
+세 가지 경로 — takeout 원본 위치, 마크다운 변환 결과 위치, 실제 옵시디언 vault 위치 —
+를 `config.json`으로 관리한다. 처음 실행하면 프로젝트 루트에 기본값으로 자동 생성된다
+(구조는 `config.example.json` 참고). 개인 경로가 들어가는 파일이라 `.gitignore` 대상이다.
+
+```json
+{
+  "takeout_paths": { "chatgpt": "", "gemini": "" },
+  "markdown_output_dir": "result",
+  "obsidian_vault_dir": "",
+  "vault_subdirs": { "chatgpt": "ChatGPT", "gemini": "Gemini" }
+}
+```
+
+**우선순위: CLI 플래그 > config.json > 내장 기본값.** 아무것도 안 정하면 기본값(원본은
+`data/<vendor>/`, 변환 결과는 `result/`, vault는 미설정)으로 동작한다. 매번 다른 위치를
+쓰고 싶으면 CLI로 그 실행만 오버라이드하고, 계속 같은 위치를 쓰고 싶으면 `config.json`을
+직접 고치면 된다.
+
+| 경로 | config.json 키 | CLI 오버라이드 | 기본값 |
+|---|---|---|---|
+| takeout 원본 | `takeout_paths.<vendor>` | `--input VENDOR=PATH` | `data/<vendor>/` |
+| 마크다운 변환 결과 | `markdown_output_dir` | `--output-dir PATH` | `result/` |
+| 옵시디언 vault | `obsidian_vault_dir` | `--vault-dir PATH` (`--publish`와 함께) | 미설정(발행 안 함) |
+
+`--publish`로 vault에 반영할 때는 `vault_subdirs`에 설정된 이름으로 벤더별 하위 폴더가
+자동 생성된다(`<vault>/ChatGPT/`, `<vault>/Gemini/`). **단순 미러링**이라 `vault_dir/
+<vendor_subdir>/<filename>` 위치만 기준으로 upsert한다 — 사용자가 vault 안에서 노트를
+다른 폴더로 옮기거나 이름을 바꿔도 추적하지 않으므로, 그 세션 내용이 나중에 바뀌면 옮긴
+자리가 아니라 원래 위치에 새로 하나가 다시 생길 수 있다.
 
 ### 종료 코드
 
@@ -79,19 +118,25 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
 ## 구조
 
 ```
-common/                # 두 벤더가 공유하는 마크다운 안전장치 / 텍스트 유틸 / frontmatter 조립
-├── markdown_safety.py   # 코드펜스 안전장치
-├── text.py               # first_sentence / yaml_quote / sanitize_filename / format_callout
-├── session_markdown.py  # frontmatter + callout 마크다운 조립
-├── attachment_cache.py  # 첨부파일 리졸버 공통 뼈대 (캐싱, dry-run 복사, 집계)
-└── zip_extract.py        # data/<vendor>/의 *.zip을 그 자리에 압축 해제
+common/                  # 두 벤더가 공유하는 로직
+├── markdown_safety.py     # 코드펜스 안전장치
+├── text.py                 # first_sentence / yaml_quote / sanitize_filename / format_callout
+├── session_markdown.py    # frontmatter + callout 마크다운 조립, content_hash 계산/추출
+├── attachment_cache.py    # 첨부파일 리졸버 공통 뼈대 (캐싱, dry-run 복사, 집계)
+├── attachment_types.py    # 첨부파일 확장자 분류 (임베드 가능 여부 등, 두 벤더 공통)
+├── zip_extract.py          # data/<vendor>/의 *.zip을 그 자리에 압축 해제 (zip slip 방어 포함)
+├── fs_discovery.py         # __MACOSX 등 압축 도구 쓰레기 경로 필터링, 후보 모호성 처리
+├── upsert.py                # content_hash 비교 기반 upsert 쓰기 (result/용)
+├── publish.py                # result/ → 실제 vault 미러링 (--publish용, upsert 재사용)
+└── config.py                  # config.json 로더 (없으면 기본값으로 생성)
 vendors/
-├── base.py             # 벤더 모듈 인터페이스 계약 + 런타임 검증(validate)
-├── chatgpt.py           # conversations*.json 트리 파싱 + .dat 첨부파일 복원
-└── gemini.py             # "내 활동.html" 블록 파싱 + 로컬 첨부파일 매칭
-run.py                  # CLI: 벤더 등록 시점 인터페이스 검증 + 자동 감지 + 실행
-tests/                  # pytest — common/ 순수 함수 + 벤더 파싱 로직(트리 브랜치 선택,
-                        # KST 파싱 등) 유닛 테스트
+├── base.py               # 벤더 모듈 인터페이스 계약(Protocol) + 런타임 검증 + 자동 탐색
+├── chatgpt.py             # conversations*.json 트리 파싱 + .dat 첨부파일 복원
+└── gemini.py               # "내 활동.html" 블록 파싱 + 로컬 첨부파일 매칭
+run.py                    # CLI: config 로딩 + 경로 우선순위 해석 + 벤더 실행 + 발행
+config.example.json       # config.json 구조 예시 (실제 config.json은 .gitignore 대상)
+tests/                    # pytest — common/ 순수 함수 + 벤더 파싱 로직(트리 브랜치 선택,
+                          # KST 파싱 등) + config/publish 유닛 테스트
 ```
 
 ## 개발
