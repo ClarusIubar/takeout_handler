@@ -1,5 +1,7 @@
 # takeout_handler
 
+한국어 | [English](README.en.md)
+
 ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크다운으로 변환하는 통합
 파이프라인. 각 벤더의 원본 export 형식이 완전히 달라서 파싱 로직은 벤더별로 분리돼
 있지만, 코드펜스 안전장치·frontmatter 조립·callout 포맷 같은 공통 로직은 `common/`에
