@@ -155,8 +155,22 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-`common/`의 함수들은 순수 함수라 파일시스템 없이 바로 테스트한다. 벤더별 파서 중
-`_active_branch_nodes`(ChatGPT 브랜치 선택), `_parse_kst`(Gemini 시간 파싱) 등
-핵심 로직도 합성 데이터로 커버한다. 실제 대용량 takeout 데이터를 이용한 전체 파이프라인
-검증(기존 결과물과의 byte-diff)은 자동 테스트에 포함하지 않았다 — 개인 데이터라 커밋할
-수 없기 때문에, 회귀가 의심될 때 수동으로 재실행해서 비교한다.
+`tests/`는 4개 계층으로 나뉘어 있다:
+
+| 디렉터리 | 보장하는 것 | 실행 |
+|---|---|---|
+| `tests/unit/` | `common/`의 순수 함수, 벤더별 파서 핵심 로직(`_active_branch_nodes`, `_parse_kst` 등)을 합성 데이터로 개별 검증 | `pytest tests/unit` |
+| `tests/regression/` | 과거 이슈(#11 Gemini 중첩 첨부파일, #13 `__MACOSX` 순서, #16 CRLF)에서 실제로 터졌던 버그를 그 경로 그대로 재현해 고정 | `pytest -m regression` |
+| `tests/integration/` | argparse → `resolve_source` → `run_vendor` → `detect`/`convert` → upsert/publish까지 전체 CLI 배선 검증 (합성 픽스처, 실제 `data/`/`config.json`은 건드리지 않음) | `pytest -m integration` |
+| `tests/smoke/` | 임포트가 깨지지 않는지, CLI가 최소한 죽지 않고 뜨는지만 확인하는 가장 얕고 빠른 확인 | `pytest -m smoke` |
+
+실제 대용량 takeout 데이터를 이용한 전체 파이프라인 검증(기존 결과물과의 byte-diff)은
+자동 테스트에 포함하지 않았다 — 개인 데이터라 커밋할 수 없기 때문에, 회귀가 의심될 때
+수동으로 재실행해서 비교한다.
+
+`run.main()`은 무조건 실제 프로젝트의 `config.json`을 읽거나(없으면 자동 생성) 없으면
+`data/<vendor>/`(개인 데이터가 들어있을 수 있는 실제 경로)로 폴백한다. `tests/conftest.py`의
+`_isolate_real_project_paths` autouse fixture가 모든 테스트에서 이 두 경로를 자동으로
+tmp 경로로 격리하므로, 새 테스트를 짤 때 이걸 깜빡해도 실제 프로젝트 파일은 안전하다 —
+다만 이건 사고를 무해하게 만드는 안전망일 뿐이니, CLI 레벨 테스트는 여전히
+`--input`/`--output-dir`/`--vault-dir`을 명시적으로 tmp 경로로 지정해서 짜야 한다.

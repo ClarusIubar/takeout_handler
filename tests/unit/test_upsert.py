@@ -65,22 +65,3 @@ def test_write_upsert_corrupted_existing_file_treated_as_update(tmp_path):
 
     assert action == "updated"
     assert fp.read_text(encoding="utf-8") == "새 내용"
-
-
-def test_write_upsert_preserves_embedded_crlf_exactly_across_read_write_cycles(tmp_path):
-    # 대화 원문에 이미 \r\n이 섞여 있으면(Windows에서 작성된 코드를 붙여넣은 경우 등),
-    # 기본 텍스트 모드로 읽고 다시 쓰면 매 사이클마다 \r가 하나씩 더 붙어서 내용이
-    # 조금씩 불어난다 — write_upsert가 newline=''로 이걸 막는지 확인.
-    fp = tmp_path / "a.md"
-    tricky = "---\ncontent_hash: h1\n---\ncode:\r\n  const x = 1;\r\n"
-
-    write_upsert(fp, tricky, "h1", dry_run=False)
-    first_bytes = fp.read_bytes()
-
-    # publish.py처럼 다시 읽어서 그대로 재기록하는 상황을 흉내: 해시가 바뀌어서
-    # "updated"로 다시 써져도 바이트가 늘어나지 않아야 한다.
-    reread = fp.read_text(encoding="utf-8", newline="")
-    assert reread == tricky  # 읽기 자체도 원본 그대로여야 함
-    write_upsert(fp, reread, "h2", dry_run=False)
-
-    assert fp.read_bytes() == first_bytes
