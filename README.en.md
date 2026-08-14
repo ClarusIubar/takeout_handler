@@ -147,6 +147,34 @@ next question."
 - `has_attachment`: whether an attachment block immediately follows this
   turn.
 
+### Note: filenames are based on session_id, not title
+
+ChatGPT's `conversations.json` provides a real `title` field for every
+conversation (the same title you see in the chat list; it falls back to the
+first user message's first sentence only when that field is empty).
+Gemini's `My Activity.html`, on the other hand, has no per-conversation
+title at all — the only field that looks like one (`class="... title"`)
+isn't a per-session value, it's just the **fixed product name "Gemini
+Apps"**, identical in every block. So Gemini always uses the first
+question's first sentence as the title instead (`first_sentence(...)`).
+
+Because of this difference between vendors, **both vendors use
+`session_id`, not `title`, as the filename**
+(`sanitize_filename(cid/sid, ...)` in `vendors/chatgpt.py`/
+`vendors/gemini.py`). If title were used as the filename instead:
+- Gemini's title is derived from the first message, so its stability
+  differs from ChatGPT's; two different sessions could also collide on the
+  same first sentence.
+- Upsert assumes "same session = same file path" (see Configuration
+  above). Using title as the filename means a change to the title-deriving
+  logic, or even a slightly different first message, could create a new
+  file and sever the link to the existing note.
+
+`session_id` comes straight from the source (ChatGPT's `conversation_id`,
+Gemini's session URL) as a stable, unique identifier, so none of that
+happens — `title` only ever shows up for display in the frontmatter; the
+actual file path and upsert decision are always based on `session_id`.
+
 ## Requirements
 
 The runtime pipeline itself uses only the standard library (Python 3.10+).
