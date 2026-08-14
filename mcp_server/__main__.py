@@ -6,6 +6,8 @@ stdio transport로 뜨는 MCP 서버는 stdout을 JSON-RPC 메시지 채널로 �
 메시지로 읽기 시작할 수 있기 때문).
 """
 
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -25,11 +27,22 @@ def main():
 
     args = build_arg_parser().parse_args()
 
+    # common.config.load_config()는 run.py(일반 CLI)를 염두에 두고 만들어져서 config.json이
+    # 없으면 안내 메시지를 stdout에 그대로 print()한다 — 이 프로세스에서는 stdout이 MCP
+    # JSON-RPC 채널이라 그 한 줄만으로도 클라이언트의 JSON 파싱이 깨진다. pipeline.py가
+    # run_vendor() 출력을 감싸는 것과 동일한 이유로, server.run() 이전의 모든 준비 단계를
+    # 통째로 감싸서 stdout이 새는 경로를 원천 차단한다.
+    captured = io.StringIO()
     try:
-        result_dir, data_dirs = resolve_server_paths(args, load_config())
+        with contextlib.redirect_stdout(captured):
+            result_dir, data_dirs = resolve_server_paths(args, load_config())
     except ValueError as exc:
         print(f"[오류] {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        setup_log = captured.getvalue()
+        if setup_log:
+            print(setup_log, end="", file=sys.stderr)
 
     try:
         from mcp_server.server import create_server
