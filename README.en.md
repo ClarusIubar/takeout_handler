@@ -152,11 +152,53 @@ doesn't provide a per-conversation title (see the wiki's
 [Output Format](https://github.com/ClarusIubar/takeout_handler/wiki/Output-Format-en)
 for the design reasoning).
 
+## MCP server (optional)
+
+`mcp_server/` exposes an [MCP](https://modelcontextprotocol.io) server so
+Claude (or any MCP client) can query sessions already rendered into
+`result/` (or a `--publish`ed vault) directly. It only reads what's already
+there — it never touches `vendors/`/`common/`, and it's a separate flow from
+`python run.py`'s convert/publish steps.
+
+```bash
+pip install -e .[mcp]   # or: pip install -r requirements-mcp.txt
+python -m mcp_server    # add --source vault to query the vault instead
+```
+
+Tools it provides: `list_sessions`, `search_sessions` (plain substring match
+over titles/turn text), `get_session` (fetch one session in full),
+`sync_takeout` (re-run the conversion — only updates `result/`, the sole
+write tool, and never touches the vault). No auth or remote transport
+(stdio only, runs as a local process).
+
+**Claude Desktop** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "takeout-handler": {
+      "command": "python",
+      "args": ["-m", "mcp_server"],
+      "cwd": "/path/to/takeout_handler"
+    }
+  }
+}
+```
+
+**Claude Code**:
+```bash
+claude mcp add takeout-handler -- python -m mcp_server
+```
+(run from the repo directory, or pass `cwd` pointing at it)
+
 ## Requirements
 
 The runtime pipeline itself uses only the standard library (Python 3.10+).
 No external packages needed. To run the tests, `pip install -r
 requirements-dev.txt` (adds only pytest).
+
+The MCP server feature (`mcp_server/`, see below) is the one exception — it
+needs the `mcp` SDK. Skip it entirely if you don't use that feature. `pip
+install -e .[mcp]` or `pip install -r requirements-mcp.txt`.
 
 ## Structure
 
@@ -171,11 +213,18 @@ common/                  # Logic shared by both vendors
 ├── fs_discovery.py         # filters archive-tool junk paths like __MACOSX, handles candidate ambiguity
 ├── upsert.py                # content_hash-comparison-based upsert writes (for result/)
 ├── publish.py                # result/ -> real vault mirroring (for --publish, reuses upsert)
-└── config.py                  # config.json loader (creates with defaults if missing)
+├── config.py                  # config.json loader (creates with defaults if missing)
+└── session_reader.py            # inverse of session_markdown.py -- rendered .md -> SessionRecord (for mcp_server)
 vendors/
 ├── base.py               # vendor module interface contract (Protocol) + runtime validation + auto-discovery
 ├── chatgpt.py             # conversations*.json tree parsing + .dat attachment recovery
 └── gemini.py               # "My Activity.html" block parsing + local attachment matching
+mcp_server/               # MCP server (optional, see above) -- read-only over result/vault
+├── config.py               # CLI flag / config.json path resolution
+├── index.py                 # builds an in-memory query index from rendered .md files
+├── pipeline.py               # for sync_takeout -- reuses run.py:run_vendor()
+├── server.py                  # tool/resource registration
+└── __main__.py                  # python -m mcp_server entry point
 run.py                    # CLI: config loading + path priority resolution + vendor execution + publishing
 config.example.json       # example config.json shape (the real config.json is .gitignore'd)
 tests/                    # pytest -- pure functions in common/ + vendor parsing logic (tree branch

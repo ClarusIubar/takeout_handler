@@ -125,10 +125,50 @@ null, "has_attachment": false} -->` 형태의 HTML 주석이 붙는다. Obsidian
 title을 제공하지 않기 때문이다 (설계 이유는 위키의
 [Output Format](https://github.com/ClarusIubar/takeout_handler/wiki/Output-Format) 참고).
 
+## MCP 서버 (선택 사항)
+
+`result/`(또는 `--publish`한 vault)에 이미 렌더링된 세션을 Claude 같은 MCP 클라이언트가
+직접 조회할 수 있게 `mcp_server/`가 [MCP](https://modelcontextprotocol.io) 서버를
+제공한다. 파서/렌더러(`vendors/`, `common/`)는 건드리지 않고, 이미 만들어진 마크다운을
+읽기만 한다 — `python run.py`로 변환/발행하는 흐름과는 별개다.
+
+```bash
+pip install -e .[mcp]   # 또는: pip install -r requirements-mcp.txt
+python -m mcp_server    # --source vault로 vault를 직접 조회하게 바꿀 수도 있음
+```
+
+제공하는 tool: `list_sessions`(목록), `search_sessions`(제목/turn 텍스트 단순 검색),
+`get_session`(세션 하나 전체 조회), `sync_takeout`(원본 재변환 — `result/`만 갱신하고
+vault는 절대 건드리지 않는 유일한 쓰기 tool). 인증/원격 전송은 지원하지 않는다(stdio only,
+로컬 프로세스로만 뜸).
+
+**Claude Desktop** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "takeout-handler": {
+      "command": "python",
+      "args": ["-m", "mcp_server"],
+      "cwd": "/path/to/takeout_handler"
+    }
+  }
+}
+```
+
+**Claude Code**:
+```bash
+claude mcp add takeout-handler -- python -m mcp_server
+```
+(저장소 디렉터리에서 실행하거나, `cwd`를 저장소 경로로 지정)
+
 ## 요구사항
 
 런타임 파이프라인 자체는 표준 라이브러리만 사용한다 (Python 3.10+). 외부 패키지 설치
 불필요. 테스트를 돌리려면 `pip install -r requirements-dev.txt` (pytest만 추가됨).
+
+MCP 서버 기능(`mcp_server/`, 아래 참고)만 예외적으로 `mcp` SDK를 필요로 한다 — 이 기능을
+쓰지 않으면 설치할 필요 없다. `pip install -e .[mcp]` 또는 `pip install -r
+requirements-mcp.txt`.
 
 ## 구조
 
@@ -143,11 +183,18 @@ common/                  # 두 벤더가 공유하는 로직
 ├── fs_discovery.py         # __MACOSX 등 압축 도구 쓰레기 경로 필터링, 후보 모호성 처리
 ├── upsert.py                # content_hash 비교 기반 upsert 쓰기 (result/용)
 ├── publish.py                # result/ → 실제 vault 미러링 (--publish용, upsert 재사용)
-└── config.py                  # config.json 로더 (없으면 기본값으로 생성)
+├── config.py                  # config.json 로더 (없으면 기본값으로 생성)
+└── session_reader.py            # session_markdown.py의 역함수 — 렌더링된 .md → SessionRecord (mcp_server용)
 vendors/
 ├── base.py               # 벤더 모듈 인터페이스 계약(Protocol) + 런타임 검증 + 자동 탐색
 ├── chatgpt.py             # conversations*.json 트리 파싱 + .dat 첨부파일 복원
 └── gemini.py               # "내 활동.html" 블록 파싱 + 로컬 첨부파일 매칭
+mcp_server/               # MCP 서버 (선택 사항, 위 참고) — result/vault를 읽기만 함
+├── config.py               # CLI 플래그/config.json 경로 해석
+├── index.py                 # 렌더링된 .md 전체를 인메모리 조회 인덱스로 구성
+├── pipeline.py               # sync_takeout용 — run.py:run_vendor() 재사용
+├── server.py                  # tool/resource 등록
+└── __main__.py                  # python -m mcp_server 진입점
 run.py                    # CLI: config 로딩 + 경로 우선순위 해석 + 벤더 실행 + 발행
 config.example.json       # config.json 구조 예시 (실제 config.json은 .gitignore 대상)
 tests/                    # pytest — common/ 순수 함수 + 벤더 파싱 로직(트리 브랜치 선택,
