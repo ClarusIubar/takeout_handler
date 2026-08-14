@@ -24,4 +24,5 @@ markers = [
     "smoke: 임포트/CLI가 죽지 않는지만 확인하는 가장 얕고 빠른 테스트",
     "integration: argparse->벤더 detect/convert->upsert/publish 전체 배선을 검증하는 테스트",
     "regression: 과거 이슈에서 실제로 터졌던 버그를 그 경로 그대로 재현해 고정하는 테스트",
+    "mcp: MCP 서버 관련 테스트 (mcp SDK 설치 필요, importorskip으로 자동 스킵됨)",
 ]
