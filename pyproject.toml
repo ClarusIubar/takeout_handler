@@ -15,3 +15,8 @@ packages = ["common", "vendors"]
 # data/, result/에는 실제 takeout에서 나온 사용자 파일(우연히 test_*.py로 시작하는 첨부파일
 # 등)이 들어있을 수 있으므로, pytest가 저장소 전체를 훑지 않고 tests/만 보게 제한한다.
 testpaths = ["tests"]
+markers = [
+    "smoke: 임포트/CLI가 죽지 않는지만 확인하는 가장 얕고 빠른 테스트",
+    "integration: argparse->벤더 detect/convert->upsert/publish 전체 배선을 검증하는 테스트",
+    "regression: 과거 이슈에서 실제로 터졌던 버그를 그 경로 그대로 재현해 고정하는 테스트",
+]

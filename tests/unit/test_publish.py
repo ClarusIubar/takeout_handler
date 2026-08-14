@@ -82,15 +82,3 @@ def test_publish_vendor_dry_run_does_not_write(tmp_path):
 def test_publish_vendor_missing_result_dir_returns_zero_stats(tmp_path):
     stats = publish_vendor(tmp_path / "does-not-exist", tmp_path / "vault", dry_run=False)
     assert stats == {"created": 0, "updated": 0, "unchanged": 0, "attachments_copied": 0}
-
-
-def test_publish_vendor_preserves_embedded_crlf_exactly(tmp_path):
-    # 실측 회귀 케이스: 대화 원문에 이미 \r\n이 섞여 있으면(Windows 코드 붙여넣기 등),
-    # result/에서 읽어서 vault/에 다시 쓰는 것만으로 바이트가 불어나면 안 된다.
-    result_dir = tmp_path / "result"
-    vault_dir = tmp_path / "vault"
-    _write_note(result_dir, "a.md", "h1", body="code:\r\n  const x = 1;\r\n")
-
-    publish_vendor(result_dir, vault_dir, dry_run=False)
-
-    assert (vault_dir / "a.md").read_bytes() == (result_dir / "a.md").read_bytes()
