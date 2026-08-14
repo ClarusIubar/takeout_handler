@@ -147,33 +147,10 @@ next question."
 - `has_attachment`: whether an attachment block immediately follows this
   turn.
 
-### Note: filenames are based on session_id, not title
-
-ChatGPT's `conversations.json` provides a real `title` field for every
-conversation (the same title you see in the chat list; it falls back to the
-first user message's first sentence only when that field is empty).
-Gemini's `My Activity.html`, on the other hand, has no per-conversation
-title at all — the only field that looks like one (`class="... title"`)
-isn't a per-session value, it's just the **fixed product name "Gemini
-Apps"**, identical in every block. So Gemini always uses the first
-question's first sentence as the title instead (`first_sentence(...)`).
-
-Because of this difference between vendors, **both vendors use
-`session_id`, not `title`, as the filename**
-(`sanitize_filename(cid/sid, ...)` in `vendors/chatgpt.py`/
-`vendors/gemini.py`). If title were used as the filename instead:
-- Gemini's title is derived from the first message, so its stability
-  differs from ChatGPT's; two different sessions could also collide on the
-  same first sentence.
-- Upsert assumes "same session = same file path" (see Configuration
-  above). Using title as the filename means a change to the title-deriving
-  logic, or even a slightly different first message, could create a new
-  file and sever the link to the existing note.
-
-`session_id` comes straight from the source (ChatGPT's `conversation_id`,
-Gemini's session URL) as a stable, unique identifier, so none of that
-happens — `title` only ever shows up for display in the frontmatter; the
-actual file path and upsert decision are always based on `session_id`.
+Filenames are based on `session_id`, not `title` — Gemini, unlike ChatGPT,
+doesn't provide a per-conversation title (see the wiki's
+[Output Format](https://github.com/ClarusIubar/takeout_handler/wiki/Output-Format-en)
+for the design reasoning).
 
 ## Requirements
 
@@ -212,26 +189,12 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-`tests/` is split into 4 layers:
-
-| Directory | What it guarantees | Run |
-|---|---|---|
-| `tests/unit/` | Individually verifies pure functions in `common/` and vendor parser core logic (`_active_branch_nodes`, `_parse_kst`, etc) with synthetic data | `pytest tests/unit` |
-| `tests/regression/` | Reproduces bugs that actually happened in past issues (#11 Gemini nested attachments, #13 `__MACOSX` ordering, #16 CRLF) via the exact path they occurred, to pin them down | `pytest -m regression` |
-| `tests/integration/` | Verifies the full CLI wiring end to end: argparse → `resolve_source` → `run_vendor` → `detect`/`convert` → upsert/publish (synthetic fixtures; never touches the real `data/`/`config.json`) | `pytest -m integration` |
-| `tests/smoke/` | The shallowest, fastest check — just confirms imports don't break and the CLI at least starts without crashing | `pytest -m smoke` |
+`tests/` is split into 4 layers — `unit`/`regression`/`integration`/`smoke` —
+and each can be run on its own, e.g. `pytest -m smoke`. See the wiki's
+[Development](https://github.com/ClarusIubar/takeout_handler/wiki/Development-en)
+page for how each layer is organized and how test isolation works.
 
 Full-pipeline verification against real, large-scale takeout data (byte-diff
 against prior output) isn't included in the automated tests — since it's
 personal data that can't be committed, it's re-run and compared manually
 whenever a regression is suspected.
-
-`run.main()` unconditionally reads the project's real `config.json` (creating
-it if missing), and falls back to `data/<vendor>/` (a real path that may
-contain personal data) if none is set. The `_isolate_real_project_paths`
-autouse fixture in `tests/conftest.py` automatically isolates both of these
-paths to temp paths for every test, so forgetting this while writing a new
-test still keeps real project files safe — but this is only a safety net
-that makes mistakes harmless, not a license to skip being explicit; CLI-level
-tests should still be written with `--input`/`--output-dir`/`--vault-dir`
-explicitly pointed at temp paths.

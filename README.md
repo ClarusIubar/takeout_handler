@@ -121,26 +121,9 @@ null, "has_attachment": false} -->` 형태의 HTML 주석이 붙는다. Obsidian
   긴 응답이 메시지 여러 개로 쪼개지는 경우) 전부 같은 `parent_turn_index`를 가리킨다.
 - `has_attachment`: 그 턴 바로 뒤에 첨부파일 블록이 붙는지 여부.
 
-### 주의: 파일명은 title이 아니라 session_id 기준이다
-
-ChatGPT의 `conversations.json`은 대화마다 실제 `title` 필드를 제공한다(사용자가 채팅
-목록에서 보는 제목과 동일, 없을 때만 첫 사용자 메시지의 첫 문장으로 대체). 반면 Gemini의
-`내 활동.html`에는 대화별 제목이 아예 없다 — 유일하게 제목처럼 보이는 필드(`class="...
-title"`)는 세션마다 다른 값이 아니라 **"Gemini 앱"이라는 고정 제품명**뿐이다. 그래서
-Gemini는 항상 첫 질문의 첫 문장을 title로 대신 쓴다(`first_sentence(...)`).
-
-이 벤더 간 차이 때문에 **두 벤더 모두 파일명은 `title`이 아니라 `session_id`로
-통일했다**(`vendors/chatgpt.py`/`vendors/gemini.py`의 `sanitize_filename(cid/sid, ...)`).
-title을 파일명 기준으로 썼다면:
-- Gemini의 title은 첫 메시지에서 유도된 값이라 벤더마다 안정성이 다르고, 서로 다른
-  세션이 같은 첫 문장을 가지면 파일명이 충돌할 수 있다.
-- upsert는 "같은 세션 = 같은 파일 경로"를 전제로 동작한다(위 설정 섹션 참고). title을
-  파일명으로 쓰면 title 계산 로직이 바뀌거나 원본 첫 메시지가 살짝 달라지는 것만으로도
-  새 파일이 생기면서 기존 노트와의 연결이 끊긴다.
-
-`session_id`는 원본(ChatGPT의 `conversation_id`, Gemini의 세션 URL)에서 그대로 온 고유
-식별자라 이런 문제가 없다 — `title`은 frontmatter에만 표시용으로 남고, 실제 파일 경로와
-upsert 판정은 전부 `session_id` 기준이다.
+파일명은 `title`이 아니라 `session_id` 기준이다 — Gemini는 ChatGPT와 달리 대화별
+title을 제공하지 않기 때문이다 (설계 이유는 위키의
+[Output Format](https://github.com/ClarusIubar/takeout_handler/wiki/Output-Format) 참고).
 
 ## 요구사항
 
@@ -178,22 +161,10 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-`tests/`는 4개 계층으로 나뉘어 있다:
-
-| 디렉터리 | 보장하는 것 | 실행 |
-|---|---|---|
-| `tests/unit/` | `common/`의 순수 함수, 벤더별 파서 핵심 로직(`_active_branch_nodes`, `_parse_kst` 등)을 합성 데이터로 개별 검증 | `pytest tests/unit` |
-| `tests/regression/` | 과거 이슈(#11 Gemini 중첩 첨부파일, #13 `__MACOSX` 순서, #16 CRLF)에서 실제로 터졌던 버그를 그 경로 그대로 재현해 고정 | `pytest -m regression` |
-| `tests/integration/` | argparse → `resolve_source` → `run_vendor` → `detect`/`convert` → upsert/publish까지 전체 CLI 배선 검증 (합성 픽스처, 실제 `data/`/`config.json`은 건드리지 않음) | `pytest -m integration` |
-| `tests/smoke/` | 임포트가 깨지지 않는지, CLI가 최소한 죽지 않고 뜨는지만 확인하는 가장 얕고 빠른 확인 | `pytest -m smoke` |
+`tests/`는 `unit`/`regression`/`integration`/`smoke` 4개 계층으로 나뉘어 있고,
+`pytest -m smoke`처럼 계층별로 따로 돌릴 수 있다. 계층별 구성과 테스트 격리 방식은
+위키의 [Development](https://github.com/ClarusIubar/takeout_handler/wiki/Development) 참고.
 
 실제 대용량 takeout 데이터를 이용한 전체 파이프라인 검증(기존 결과물과의 byte-diff)은
 자동 테스트에 포함하지 않았다 — 개인 데이터라 커밋할 수 없기 때문에, 회귀가 의심될 때
 수동으로 재실행해서 비교한다.
-
-`run.main()`은 무조건 실제 프로젝트의 `config.json`을 읽거나(없으면 자동 생성) 없으면
-`data/<vendor>/`(개인 데이터가 들어있을 수 있는 실제 경로)로 폴백한다. `tests/conftest.py`의
-`_isolate_real_project_paths` autouse fixture가 모든 테스트에서 이 두 경로를 자동으로
-tmp 경로로 격리하므로, 새 테스트를 짤 때 이걸 깜빡해도 실제 프로젝트 파일은 안전하다 —
-다만 이건 사고를 무해하게 만드는 안전망일 뿐이니, CLI 레벨 테스트는 여전히
-`--input`/`--output-dir`/`--vault-dir`을 명시적으로 tmp 경로로 지정해서 짜야 한다.
