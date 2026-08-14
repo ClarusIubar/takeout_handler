@@ -121,6 +121,27 @@ null, "has_attachment": false} -->` 형태의 HTML 주석이 붙는다. Obsidian
   긴 응답이 메시지 여러 개로 쪼개지는 경우) 전부 같은 `parent_turn_index`를 가리킨다.
 - `has_attachment`: 그 턴 바로 뒤에 첨부파일 블록이 붙는지 여부.
 
+### 주의: 파일명은 title이 아니라 session_id 기준이다
+
+ChatGPT의 `conversations.json`은 대화마다 실제 `title` 필드를 제공한다(사용자가 채팅
+목록에서 보는 제목과 동일, 없을 때만 첫 사용자 메시지의 첫 문장으로 대체). 반면 Gemini의
+`내 활동.html`에는 대화별 제목이 아예 없다 — 유일하게 제목처럼 보이는 필드(`class="...
+title"`)는 세션마다 다른 값이 아니라 **"Gemini 앱"이라는 고정 제품명**뿐이다. 그래서
+Gemini는 항상 첫 질문의 첫 문장을 title로 대신 쓴다(`first_sentence(...)`).
+
+이 벤더 간 차이 때문에 **두 벤더 모두 파일명은 `title`이 아니라 `session_id`로
+통일했다**(`vendors/chatgpt.py`/`vendors/gemini.py`의 `sanitize_filename(cid/sid, ...)`).
+title을 파일명 기준으로 썼다면:
+- Gemini의 title은 첫 메시지에서 유도된 값이라 벤더마다 안정성이 다르고, 서로 다른
+  세션이 같은 첫 문장을 가지면 파일명이 충돌할 수 있다.
+- upsert는 "같은 세션 = 같은 파일 경로"를 전제로 동작한다(위 설정 섹션 참고). title을
+  파일명으로 쓰면 title 계산 로직이 바뀌거나 원본 첫 메시지가 살짝 달라지는 것만으로도
+  새 파일이 생기면서 기존 노트와의 연결이 끊긴다.
+
+`session_id`는 원본(ChatGPT의 `conversation_id`, Gemini의 세션 URL)에서 그대로 온 고유
+식별자라 이런 문제가 없다 — `title`은 frontmatter에만 표시용으로 남고, 실제 파일 경로와
+upsert 판정은 전부 `session_id` 기준이다.
+
 ## 요구사항
 
 런타임 파이프라인 자체는 표준 라이브러리만 사용한다 (Python 3.10+). 외부 패키지 설치
