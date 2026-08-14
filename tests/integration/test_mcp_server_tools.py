@@ -140,6 +140,28 @@ def test_sync_takeout_reports_skip_when_data_dir_not_configured(tmp_path):
     assert result.structured_content["chatgpt"]["skipped"] is True
 
 
+def test_get_session_markdown_format_raises_when_file_missing_from_disk(tmp_path):
+    _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "제목", "2024-01-01", _turns())
+    server = create_server(tmp_path)
+    # 인덱스는 이미 만들어졌는데 파일이 나중에 지워진 경우(디스크와 인덱스 불일치).
+    (tmp_path / "chatgpt" / "s1.md").unlink()
+
+    with pytest.raises(Exception, match="세션 마크다운 파일을 찾을 수 없음"):
+        _call_tool(server, "get_session", {"vendor": "chatgpt", "session_id": "s1", "format": "markdown"})
+
+
+def test_sync_takeout_raises_for_unknown_vendor(tmp_path):
+    server = create_server(tmp_path)
+    with pytest.raises(Exception, match="알 수 없는 벤더"):
+        _call_tool(server, "sync_takeout", {"vendor": "no-such-vendor"})
+
+
+def test_sync_takeout_reports_skip_when_data_dir_does_not_exist_on_disk(tmp_path):
+    server = create_server(tmp_path, data_dirs={"chatgpt": tmp_path / "no-such-data-dir"})
+    result = _call_tool(server, "sync_takeout", {"vendor": "chatgpt"})
+    assert result.structured_content["chatgpt"]["skipped"] is True
+
+
 def test_sessions_resource_lists_all_sessions(tmp_path):
     _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "제목", "2024-01-01", _turns())
 
@@ -168,3 +190,20 @@ def test_session_markdown_resource_returns_raw_file_bytes(tmp_path):
     contents = _read_resource(server, "takeout://sessions/chatgpt/s1.md")
 
     assert contents[0].content == raw
+
+
+def test_session_json_resource_raises_for_missing_session(tmp_path):
+    # resource 템플릿 에러는 mcp SDK가 "Error creating resource from template <uri>"로
+    # 감싸므로(tool 에러의 "Error executing tool X: <원본 메시지>"와 다른 포맷), 원인
+    # 예외(__cause__)에서 우리가 실제로 던진 메시지를 확인한다.
+    server = create_server(tmp_path)
+    with pytest.raises(Exception) as exc_info:
+        _read_resource(server, "takeout://sessions/chatgpt/missing.json")
+    assert "세션을 찾을 수 없음" in str(exc_info.value.__cause__)
+
+
+def test_session_markdown_resource_raises_for_missing_file(tmp_path):
+    server = create_server(tmp_path)
+    with pytest.raises(Exception) as exc_info:
+        _read_resource(server, "takeout://sessions/chatgpt/missing.md")
+    assert "찾을 수 없음" in str(exc_info.value.__cause__)

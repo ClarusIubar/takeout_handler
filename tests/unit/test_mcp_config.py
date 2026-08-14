@@ -66,6 +66,28 @@ def test_data_dirs_use_configured_directory_path(tmp_path):
     assert data_dirs["chatgpt"] == custom.resolve()
 
 
+def test_resolve_data_dir_falls_back_to_default_for_non_dir_non_zip_path(tmp_path):
+    weird_file = tmp_path / "not-a-zip.txt"
+    weird_file.write_text("hi", encoding="utf-8")
+
+    _result_dir, data_dirs = resolve_server_paths(_args(), config={"takeout_paths": {"chatgpt": str(weird_file)}})
+
+    assert data_dirs["chatgpt"] == ROOT / "data" / "chatgpt"
+
+
+def test_resolve_server_paths_defaults_cli_args_when_omitted():
+    result_dir, _data_dirs = resolve_server_paths(config={})
+    assert result_dir == (ROOT / "result").resolve()
+
+
+def test_resolve_server_paths_defaults_config_when_omitted(patched_config_path):
+    # config를 생략하면 실제 load_config()가 호출되므로, patched_config_path로
+    # 실제 프로젝트의 config.json 대신 tmp_path를 보게 한다.
+    result_dir, _data_dirs = resolve_server_paths(_args())
+    assert result_dir == (ROOT / "result").resolve()
+    assert patched_config_path.exists()  # load_config()가 기본값으로 새로 만든 파일
+
+
 def test_data_dirs_extracts_configured_zip_path(tmp_path, monkeypatch):
     # 실제 프로젝트의 data/ 아래에 압축을 풀면 안 되므로 DATA_DIR을 tmp_path로 돌린다
     # (conftest.py의 run.DATA_DIR 격리와 동일한 이유).

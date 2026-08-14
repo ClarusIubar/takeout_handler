@@ -1,3 +1,5 @@
+import pytest
+
 from common.session_markdown import build_session_markdown
 from common.session_reader import parse_session_markdown
 
@@ -116,3 +118,41 @@ def test_round_trip_answer_only_question_has_no_following_assistant():
 
     assert len(record.turns) == 1
     assert record.turns[0].parent_turn_index is None
+
+
+def test_parse_session_markdown_raises_when_frontmatter_missing():
+    with pytest.raises(ValueError, match="frontmatter"):
+        parse_session_markdown("이건 그냥 본문이고 frontmatter가 없음", vendor_tag="chatgpt")
+
+
+def test_parse_frontmatter_tolerates_blank_line_between_fields():
+    # 실제로 build_session_markdown()은 이런 마크다운을 만들지 않지만, 사용자가 직접
+    # 편집한 노트를 열었을 때 빈 줄 하나 때문에 전체 파싱이 죽으면 안 된다.
+    md, content_hash = _build(_turns())
+    md_with_blank_line = md.replace('turns_count: 2\n', 'turns_count: 2\n\n')
+    record = parse_session_markdown(md_with_blank_line, vendor_tag="chatgpt")
+    assert record.content_hash == content_hash
+
+
+def test_parse_frontmatter_tags_stop_before_next_top_level_field():
+    # tags 블록 뒤에 다른 필드가 더 있어도(현재 렌더러는 tags를 마지막에 두지만,
+    # 순서가 바뀔 가능성에 대비) tags 리스트가 그 필드까지 삼키면 안 된다.
+    md, _hash = _build(_turns())
+    reordered = md.replace(
+        'tags:\n  - chatgpt\n  - chat-session\n---\n\n',
+        'tags:\n  - chatgpt\n  - chat-session\nextra: ignored\n---\n\n',
+    )
+    record = parse_session_markdown(reordered, vendor_tag="chatgpt")
+    assert record.tags == ["chatgpt", "chat-session"]
+
+
+def test_parse_turns_raises_when_callout_header_missing_after_comment():
+    broken = (
+        '---\ntitle: "t"\nsession_id: "s"\nurl: u\ndate: d\nturns_count: 1\n'
+        'content_hash: abc\ntags:\n  - chatgpt\n---\n\n'
+        '# t\n\n<!-- turn: {"turn_index": 0, "role": "user", '
+        '"parent_turn_index": null, "has_attachment": false} -->\n'
+        '이건 콜아웃 헤더가 아님\n'
+    )
+    with pytest.raises(ValueError, match="callout header"):
+        parse_session_markdown(broken, vendor_tag="chatgpt")

@@ -116,6 +116,64 @@ def test_get_session_returns_none_when_not_found(tmp_path):
     assert index.get_session("chatgpt", "missing") is None
 
 
+def test_rebuild_with_explicit_vendor_list_ignores_other_dirs(tmp_path):
+    _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "a", "2024-01-01", _turns())
+    _write_session(tmp_path / "gemini", "gemini", "s2", "b", "2024-01-02", _turns())
+
+    index = SessionIndex()
+    index.rebuild(tmp_path, vendors=["chatgpt"])
+
+    assert [s.session_id for s in index.list_sessions()] == ["s1"]
+
+
+def test_rebuild_with_explicit_vendor_list_skips_nonexistent_vendor_dir(tmp_path):
+    _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "a", "2024-01-01", _turns())
+
+    index = SessionIndex()
+    # "gemini" 디렉터리가 실제로 없어도(아직 sync 안 함 등) 죽지 않고 조용히 건너뜀.
+    index.rebuild(tmp_path, vendors=["chatgpt", "gemini"])
+
+    assert [s.session_id for s in index.list_sessions()] == ["s1"]
+
+
+def test_search_sessions_vendor_filter_excludes_other_vendors(tmp_path):
+    _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "찾는말", "2024-01-01", _turns())
+    _write_session(tmp_path / "gemini", "gemini", "s2", "찾는말", "2024-01-02", _turns())
+
+    index = SessionIndex()
+    index.rebuild(tmp_path)
+
+    results = index.search_sessions("찾는말", vendor="chatgpt")
+    assert [s.session_id for s, _snippet in results] == ["s1"]
+
+
+def test_search_sessions_date_to_excludes_sessions_after_range(tmp_path):
+    _write_session(tmp_path / "chatgpt", "chatgpt", "old", "찾는말", "2024-01-01", _turns())
+    _write_session(tmp_path / "chatgpt", "chatgpt", "new", "찾는말", "2024-06-01", _turns())
+
+    index = SessionIndex()
+    index.rebuild(tmp_path)
+
+    results = index.search_sessions("찾는말", date_to="2024-03-01")
+    assert [s.session_id for s, _snippet in results] == ["old"]
+
+
+def test_search_sessions_stops_early_once_limit_reached(tmp_path):
+    # 제목이 아니라 turn 텍스트로 매치시켜야 한다 — 제목 매치는 continue로 곧장
+    # 다음 세션으로 넘어가서 limit 체크(및 break)를 아예 안 거치기 때문.
+    for i in range(5):
+        _write_session(
+            tmp_path / "chatgpt", "chatgpt", f"s{i}", "제목", f"2024-01-0{i + 1}",
+            _turns(user_text="찾는말이 turn 텍스트에 있음"),
+        )
+
+    index = SessionIndex()
+    index.rebuild(tmp_path)
+
+    results = index.search_sessions("찾는말", limit=2)
+    assert len(results) == 2
+
+
 def test_rebuild_skips_files_that_fail_to_parse(tmp_path):
     vendor_dir = tmp_path / "chatgpt"
     vendor_dir.mkdir(parents=True)

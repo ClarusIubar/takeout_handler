@@ -26,6 +26,20 @@ def test_help_exits_zero_without_mcp_installed(monkeypatch, capsys):
     assert "--source" in out
 
 
+def test_invalid_path_config_prints_error_and_exits_1(monkeypatch, capsys, patched_config_path):
+    # --source vault인데 obsidian_vault_dir이 어디에도 설정 안 된 경우: resolve_server_paths()가
+    # ValueError를 던지고, main()은 (mcp 설치 여부와 무관하게) 그 전에 [오류]로 종료해야 한다.
+    monkeypatch.setattr("sys.argv", ["mcp_server", "--source", "vault"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        mcp_main.main()
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "[오류]" in err
+    assert "obsidian_vault_dir" in err
+
+
 def test_missing_mcp_package_prints_install_hint_and_exits_1(monkeypatch, capsys, patched_config_path):
     # mcp가 실제로 설치돼 있는 환경에서도 "설치 안 됨" 경로를 검증할 수 있도록,
     # mcp_server.server 임포트만 강제로 실패시킨다 (sys.modules에 None을 넣으면 다음
