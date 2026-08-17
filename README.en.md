@@ -190,6 +190,34 @@ claude mcp add takeout-handler -- python -m mcp_server
 ```
 (run from the repo directory, or pass `cwd` pointing at it)
 
+## Tool-usage eval (eval/, optional)
+
+`eval/` holds a harness that checks whether a real LLM correctly picks the
+right one of the 4 MCP tools for natural-language requests. It deliberately
+targets a low-reasoning model served locally via LM Studio (`gemma-4-12b-it`)
+rather than a frontier/cloud model — if a weak model can use the tools
+correctly, that's a far more trustworthy signal about interface quality than
+a frontier model succeeding, since raw inference power can paper over
+badly-designed tool descriptions/schemas in a way that doesn't generalize.
+
+```bash
+pip install -e .[mcp]           # eval reuses mcp_server as-is
+python -m eval.harness          # requires LM Studio running locally at http://localhost:1234
+```
+
+**Entirely separate from `pytest`** — LLM output is non-deterministic and a
+local LM Studio server has to actually be running, so this lives outside
+`tests/` (in `eval/`) and isn't wired into CI. Only the deterministic grading
+logic (pure functions) is unit-tested, in `tests/unit/test_eval_*.py`. See
+[eval/README.md](eval/README.md) for the task list and fixture design
+rationale.
+
+All 14 tasks above use synthetic fixtures. To try the same methodology
+interactively against your own real `result/` data, use `python -m
+eval.manual_probe` (no automated grading, nothing written to disk). See the
+"실제 데이터 수동 점검" section in [eval/README.md](eval/README.md) for
+details.
+
 ## Requirements
 
 The runtime pipeline itself uses only the standard library (Python 3.10+).
@@ -225,6 +253,12 @@ mcp_server/               # MCP server (optional, see above) -- read-only over r
 ├── pipeline.py               # for sync_takeout -- reuses run.py:run_vendor()
 ├── server.py                  # tool/resource registration
 └── __main__.py                  # python -m mcp_server entry point
+eval/                     # tool-usage eval (optional, see above) -- unrelated to pytest
+├── lm_studio_client.py     # LM Studio (OpenAI-compatible) client
+├── fixtures.py               # synthetic session data for the eval
+├── tasks.py                    # eval task definitions
+├── harness.py                    # core loop + `python -m eval.harness` entry point
+└── report.py                       # console summary table + JSON report
 run.py                    # CLI: config loading + path priority resolution + vendor execution + publishing
 config.example.json       # example config.json shape (the real config.json is .gitignore'd)
 tests/                    # pytest -- pure functions in common/ + vendor parsing logic (tree branch

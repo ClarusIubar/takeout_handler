@@ -161,6 +161,29 @@ claude mcp add takeout-handler -- python -m mcp_server
 ```
 (저장소 디렉터리에서 실행하거나, `cwd`를 저장소 경로로 지정)
 
+## 도구 사용 평가 (eval/, 선택 사항)
+
+MCP 서버의 tool 4개를 실제 LLM이 자연어 요청에 맞춰 올바르게 골라 쓰는지 확인하는
+하네스가 `eval/`에 있다. 일부러 프론티어(클라우드) 모델이 아니라 LM Studio로 로컬
+서빙하는 저추론 모델(`gemma-4-12b-it`)로 평가한다 — 약한 모델이 tool을 올바르게 쓸 수
+있다면, 강한 추론력으로 어설픈 tool 설명/스키마를 무마해버리는 것보다 인터페이스
+품질에 대해 훨씬 신뢰할 수 있는 신호이기 때문이다.
+
+```bash
+pip install -e .[mcp]           # eval도 mcp_server를 그대로 불러와 씀
+python -m eval.harness          # LM Studio(http://localhost:1234)가 로컬에 떠 있어야 함
+```
+
+**`pytest`와 완전히 무관하다** — LLM 출력이 비결정적이고 로컬 LM Studio 서버가 실제로
+떠 있어야 해서 `tests/` 밖(`eval/`)에 두고 CI에도 엮지 않았다. 채점 로직 자체(순수
+함수)만 `tests/unit/test_eval_*.py`로 결정론적으로 테스트한다. 태스크 목록·픽스처
+설계 근거는 [eval/README.md](eval/README.md) 참고.
+
+위 14개 태스크는 전부 합성 픽스처를 쓴다 — 실제 본인 `result/` 데이터에 대고 같은
+방법론으로 대화형 수동 점검을 해보고 싶다면 `python -m eval.manual_probe`(자동 채점
+없음, 저장 없음)를 쓴다. 자세한 내용은 [eval/README.md](eval/README.md)의 "실제 데이터
+수동 점검" 절 참고.
+
 ## 요구사항
 
 런타임 파이프라인 자체는 표준 라이브러리만 사용한다 (Python 3.10+). 외부 패키지 설치
@@ -195,6 +218,12 @@ mcp_server/               # MCP 서버 (선택 사항, 위 참고) — result/va
 ├── pipeline.py               # sync_takeout용 — run.py:run_vendor() 재사용
 ├── server.py                  # tool/resource 등록
 └── __main__.py                  # python -m mcp_server 진입점
+eval/                     # tool 사용 품질 평가 (선택 사항, 위 참고) — pytest와 무관
+├── lm_studio_client.py     # LM Studio(OpenAI 호환) 클라이언트
+├── fixtures.py               # 평가용 합성 세션 데이터
+├── tasks.py                    # 평가 태스크 정의
+├── harness.py                    # 핵심 루프 + `python -m eval.harness` 진입점
+└── report.py                       # 콘솔 요약 표 + JSON 리포트
 run.py                    # CLI: config 로딩 + 경로 우선순위 해석 + 벤더 실행 + 발행
 config.example.json       # config.json 구조 예시 (실제 config.json은 .gitignore 대상)
 tests/                    # pytest — common/ 순수 함수 + 벤더 파싱 로직(트리 브랜치 선택,
