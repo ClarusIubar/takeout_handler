@@ -2,8 +2,8 @@
 
 한국어 | [English](README.en.md)
 
-ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크다운으로 변환하는 통합
-파이프라인. 각 벤더의 원본 export 형식이 완전히 달라서 파싱 로직은 벤더별로 분리돼
+ChatGPT / Gemini / Claude Takeout(데이터 내보내기)을 옵시디언 호환 마크다운으로 변환하는
+통합 파이프라인. 각 벤더의 원본 export 형식이 완전히 달라서 파싱 로직은 벤더별로 분리돼
 있지만, 코드펜스 안전장치·frontmatter 조립·callout 포맷 같은 공통 로직은 `common/`에
 하나로 모아서 공유한다.
 
@@ -15,7 +15,8 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
    ```
    data/
    ├── chatgpt/   # ChatGPT의 Data export zip을 그대로, 또는 압축을 푼 내용
-   └── gemini/    # Google Takeout zip을 그대로, 또는 압축을 푼 내용
+   ├── gemini/    # Google Takeout zip을 그대로, 또는 압축을 푼 내용
+   └── claude/    # Claude(Anthropic)의 데이터 내보내기 zip을 그대로, 또는 압축을 푼 내용
    ```
 
    `run.py`가 각 벤더 폴더에서 필요한 파일을 못 찾으면 그 폴더 안의 `*.zip`을 자동으로
@@ -32,6 +33,13 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
      `Takeout/<서비스명>/` 처럼 한 겹 이상 감싸져 있고, 그 안에 `내 활동.html`과 첨부
      미디어 파일들이 나란히 들어있다. `Takeout/` 폴더째로 `data/gemini/`에 넣으면 된다
      (하위 폴더를 직접 뒤져서 꺼낼 필요 없음).
+   - **Claude** ("설정 → 계정 → 데이터 내보내기"로 받는 zip): 압축 최상위에
+     `conversations.json`(프로젝트에 안 묶인 일반 대화 전체가 배열 하나로), `design_chats/`
+     (프로젝트에 묶인 대화가 파일 하나당 하나씩), `projects/`(프로젝트 메타데이터, 있는
+     경우만) 등이 나온다. 계정 데이터가 많으면 `data-...-batch-0000.zip`처럼 여러 파트로
+     나뉠 수 있는데, **현재는 파트 하나만 지원한다** — 여러 파트를 같은 폴더에 풀면
+     `conversations.json`/`design_chats/`가 파트끼리 서로 덮어써서 일부 대화가 누락될 수
+     있으므로, 파트가 여러 개라면 각 파트를 따로 처리해야 한다.
 
 2. 실행한다.
 
@@ -40,9 +48,9 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
    ```
 
    `data/` 아래 존재가 감지되는 벤더만 자동으로 골라 실행한다. 특정 벤더만 실행하려면
-   `--vendor chatgpt` 또는 `--vendor gemini`를 지정한다. `--dry-run`을 붙이면 실제
-   파일을 만들지 않고 파싱 결과(세션 수, 스킵 수, 첨부파일 해석 성공/실패 수)만 콘솔에
-   출력한다.
+   `--vendor chatgpt`, `--vendor gemini`, `--vendor claude` 중 하나를 지정한다.
+   `--dry-run`을 붙이면 실제 파일을 만들지 않고 파싱 결과(세션 수, 스킵 수, 첨부파일
+   해석 성공/실패 수)만 콘솔에 출력한다.
 
    원본을 `data/<vendor>/`로 옮기고 싶지 않으면(예: 다운로드 폴더에 있는 zip을 그대로
    쓰고 싶을 때) `--input`으로 위치를 직접 지정할 수 있다 — 코드 어디에도 실제 경로가
@@ -55,7 +63,10 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
    폴더를 넘기면 그 폴더를 그대로 원본으로 쓰고(아무것도 복사/이동 안 함), `.zip`
    파일을 넘기면 원본은 그대로 둔 채 내용만 `data/<vendor>/`에 풀어서 쓴다.
 
-3. 결과는 `result/<vendor>/*.md` (+ `result/<vendor>/Attachments/`)에 생성된다.
+3. 결과는 `result/<vendor>/*.md` (+ `result/<vendor>/Attachments/`)에 생성된다. Claude는
+   예외적으로 프로젝트에 묶인 대화만 `result/claude/<프로젝트명>/*.md`처럼 프로젝트별
+   하위 폴더에 생성되고, 프로젝트에 안 묶인 일반 대화는 다른 벤더와 동일하게
+   `result/claude/*.md`에 바로 생성된다.
 
 4. 검토가 끝났으면 `--publish`로 실제 옵시디언 vault에 반영한다 (아래 "설정" 참고).
    변환(2번)과 vault 반영(4번)을 분리해둔 이유는, 실제 PKM 저장소에 파일을 쓰는 건
@@ -73,10 +84,10 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
 
 ```json
 {
-  "takeout_paths": { "chatgpt": "", "gemini": "" },
+  "takeout_paths": { "chatgpt": "", "gemini": "", "claude": "" },
   "markdown_output_dir": "result",
   "obsidian_vault_dir": "",
-  "vault_subdirs": { "chatgpt": "ChatGPT", "gemini": "Gemini" }
+  "vault_subdirs": { "chatgpt": "ChatGPT", "gemini": "Gemini", "claude": "Claude" }
 }
 ```
 
@@ -92,10 +103,13 @@ ChatGPT / Gemini Takeout(데이터 내보내기)을 옵시디언 호환 마크�
 | 옵시디언 vault | `obsidian_vault_dir` | `--vault-dir PATH` (`--publish`와 함께) | 미설정(발행 안 함) |
 
 `--publish`로 vault에 반영할 때는 `vault_subdirs`에 설정된 이름으로 벤더별 하위 폴더가
-자동 생성된다(`<vault>/ChatGPT/`, `<vault>/Gemini/`). **단순 미러링**이라 `vault_dir/
-<vendor_subdir>/<filename>` 위치만 기준으로 upsert한다 — 사용자가 vault 안에서 노트를
-다른 폴더로 옮기거나 이름을 바꿔도 추적하지 않으므로, 그 세션 내용이 나중에 바뀌면 옮긴
-자리가 아니라 원래 위치에 새로 하나가 다시 생길 수 있다.
+자동 생성된다(`<vault>/ChatGPT/`, `<vault>/Gemini/`, `<vault>/Claude/`). **단순 미러링**이라
+`vault_dir/<vendor_subdir>/<filename>`(Claude는 프로젝트 대화의 경우
+`vault_dir/<vendor_subdir>/<프로젝트명>/<filename>`) 위치만 기준으로 upsert한다 —
+사용자가 vault 안에서 노트를 다른 폴더로 옮기거나 이름을 바꿔도 추적하지 않으므로, 그
+세션 내용이 나중에 바뀌면 옮긴 자리가 아니라 원래 위치에 새로 하나가 다시 생길 수 있다.
+같은 이유로 Claude 프로젝트 이름이 나중에 바뀌면 새 하위 폴더에 파일이 다시 생기고
+예전 폴더에는 고아 파일이 남을 수 있다.
 
 ### 종료 코드
 
@@ -125,6 +139,11 @@ null, "has_attachment": false} -->` 형태의 HTML 주석이 붙는다. Obsidian
 title을 제공하지 않기 때문이다 (설계 이유는 위키의
 [Output Format](https://github.com/ClarusIubar/takeout_handler/wiki/Output-Format) 참고).
 
+**Claude 관련 범위 밖 항목**: `memories.json`(기억 기능 요약), `login_history.json`(로그인
+이력), `users.json`(계정 정보), `projects/*.json`의 `docs` 필드(프로젝트 지식 파일)는
+대화가 아니므로 변환하지 않는다. 이 export에는 첨부파일 실 바이트가 전혀 들어있지 않아서
+(참조 파일명만 있음) 첨부파일은 항상 "누락" 안내 텍스트로만 표시된다.
+
 ## 요구사항
 
 런타임 파이프라인 자체는 표준 라이브러리만 사용한다 (Python 3.10+). 외부 패키지 설치
@@ -133,21 +152,24 @@ title을 제공하지 않기 때문이다 (설계 이유는 위키의
 ## 구조
 
 ```
-common/                  # 두 벤더가 공유하는 로직
+common/                  # 벤더들이 공유하는 로직
 ├── markdown_safety.py     # 코드펜스 안전장치
 ├── text.py                 # first_sentence / yaml_quote / sanitize_filename / format_callout
 ├── session_markdown.py    # frontmatter + callout 마크다운 조립, content_hash 계산/추출
 ├── attachment_cache.py    # 첨부파일 리졸버 공통 뼈대 (캐싱, dry-run 복사, 집계)
-├── attachment_types.py    # 첨부파일 확장자 분류 (임베드 가능 여부 등, 두 벤더 공통)
+├── attachment_types.py    # 첨부파일 확장자 분류 (임베드 가능 여부 등, 벤더 공통)
 ├── zip_extract.py          # data/<vendor>/의 *.zip을 그 자리에 압축 해제 (zip slip 방어 포함)
 ├── fs_discovery.py         # __MACOSX 등 압축 도구 쓰레기 경로 필터링, 후보 모호성 처리
 ├── upsert.py                # content_hash 비교 기반 upsert 쓰기 (result/용)
-├── publish.py                # result/ → 실제 vault 미러링 (--publish용, upsert 재사용)
+├── publish.py                # result/ → 실제 vault 미러링 (--publish용, upsert 재사용,
+│                             #   result_dir 하위 폴더까지 재귀 미러링)
 └── config.py                  # config.json 로더 (없으면 기본값으로 생성)
 vendors/
 ├── base.py               # 벤더 모듈 인터페이스 계약(Protocol) + 런타임 검증 + 자동 탐색
 ├── chatgpt.py             # conversations*.json 트리 파싱 + .dat 첨부파일 복원
-└── gemini.py               # "내 활동.html" 블록 파싱 + 로컬 첨부파일 매칭
+├── gemini.py               # "내 활동.html" 블록 파싱 + 로컬 첨부파일 매칭
+└── claude.py               # conversations.json(일반 대화) + design_chats/*.json(프로젝트
+                            #   소속 에이전틱 대화, 별도 스키마) 파싱
 run.py                    # CLI: config 로딩 + 경로 우선순위 해석 + 벤더 실행 + 발행
 config.example.json       # config.json 구조 예시 (실제 config.json은 .gitignore 대상)
 tests/                    # pytest — common/ 순수 함수 + 벤더 파싱 로직(트리 브랜치 선택,
