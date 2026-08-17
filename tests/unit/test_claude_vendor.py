@@ -232,3 +232,173 @@ def test_convert_standalone_tool_result_local_resource_is_not_silently_dropped(t
     text = (result_dir / "conv-resource.md").read_text(encoding="utf-8")
     assert "price vs performance" in text
     assert "chart.jsx" in text
+
+
+# ==========================================
+# design_chats/*.json (프로젝트/에이전틱 대화) 로더
+# ==========================================
+
+def _write_design_chat(dir_path, uuid, project_name, messages, title="Chat"):
+    (dir_path / "design_chats").mkdir(parents=True, exist_ok=True)
+    payload = {
+        "uuid": uuid,
+        "title": title,
+        "project": {"uuid": f"proj-{project_name}", "name": project_name},
+        "created_at": "2026-06-19T11:00:00.000000Z",
+        "updated_at": "2026-06-19T11:10:00.000000Z",
+        "messages": messages,
+    }
+    (dir_path / "design_chats" / f"{uuid}.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _plain_user_message(text="다시 재개"):
+    return {
+        "uuid": "u-1",
+        "role": "user",
+        "content": {
+            "authorAccountUuid": "acc-1",
+            "authorName": "Tester",
+            "content": text,
+            "id": "u-1",
+            "role": "user",
+            "timestamp": "2026-06-19T11:00:00.000000Z",
+        },
+    }
+
+
+def _agentic_assistant_message():
+    return {
+        "uuid": "a-1",
+        "role": "assistant",
+        "content": {
+            "id": "a-1",
+            "role": "assistant",
+            "content": "ignored raw text, contentBlocks is the source of truth",
+            "contentBlocks": [
+                {"type": "text", "text": "I'll check the repo."},
+                {
+                    "type": "tool_call",
+                    "toolCall": {
+                        "id": "toolu_1",
+                        "type": "edit",
+                        "name": "github_list_repos",
+                        "input": {},
+                        "output": "1 repository found",
+                    },
+                },
+                {"type": "thinking", "text": "The user wants a repo summary."},
+                {"type": "some_future_block_type", "x": 1},
+            ],
+            "id": "a-1",
+            "role": "assistant",
+            "timestamp": "2026-06-19T11:05:00.000000Z",
+        },
+    }
+
+
+def test_convert_project_chat_creates_file_in_project_subfolder(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_design_chat(
+        data_dir, "chat-1", "Jamissue",
+        [_plain_user_message(), _agentic_assistant_message()],
+    )
+    result_dir = tmp_path / "result"
+
+    stats = convert(data_dir, result_dir, dry_run=False)
+
+    assert stats.sessions_found == 1
+    md_path = result_dir / "Jamissue" / "chat-1.md"
+    assert md_path.exists()
+    text = md_path.read_text(encoding="utf-8")
+    assert "다시 재개" in text
+    assert "I'll check the repo." in text
+    assert "github_list_repos" in text
+    assert "The user wants a repo summary." in text
+
+
+def test_convert_project_chat_with_attachment_object_content_and_empty_title(tmp_path):
+    data_dir = tmp_path / "data"
+    user_msg = {
+        "uuid": "u-2",
+        "role": "user",
+        "content": {
+            "authorAccountUuid": "acc-1",
+            "authorName": "Tester",
+            "content": "Please review this file",
+            "attachments": [{"id": "att-1", "name": "notes.txt", "content": "some notes"}],
+            "id": "u-2",
+            "role": "user",
+            "timestamp": "2026-06-19T11:00:00.000000Z",
+        },
+    }
+    _write_design_chat(data_dir, "chat-2", "GDWEB", [user_msg], title="")
+    result_dir = tmp_path / "result"
+
+    convert(data_dir, result_dir, dry_run=False)
+
+    text = (result_dir / "GDWEB" / "chat-2.md").read_text(encoding="utf-8")
+    assert "Please review this file" in text
+    assert 'title: "Please review this file"' in text
+
+
+def test_convert_project_chat_empty_messages_is_skipped(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_design_chat(data_dir, "chat-empty", "Untitled", [])
+    result_dir = tmp_path / "result"
+
+    stats = convert(data_dir, result_dir, dry_run=False)
+
+    assert stats.empty_skipped == 1
+    assert not (result_dir / "Untitled").exists()
+
+
+def test_convert_project_chat_renders_user_interjection_content(tmp_path):
+    # 실제 사용자 zip으로 검증하다 발견한 버그: user_interjection 블록의 실제 텍스트는
+    # block['text']/block['content']가 아니라 block['message']['content']에 있다
+    # (실제 스키마: {"type": "user_interjection", "message": {"role": "user",
+    # "content": "...", "attachments": [...]}}). 잘못된 키를 읽으면 조용히 빈 문자열을
+    # 반환해서 중간에 사용자가 끼어든 실제 발화가 통째로 사라진다.
+    data_dir = tmp_path / "data"
+    assistant_msg = {
+        "uuid": "a-2",
+        "role": "assistant",
+        "content": {
+            "contentBlocks": [
+                {"type": "text", "text": "여름 팔레트를 분홍으로 바꿨습니다."},
+                {
+                    "type": "user_interjection",
+                    "message": {
+                        "id": "u-int-1",
+                        "role": "user",
+                        "content": "아 여름 색깔 분홍계열로 금방 또 바뀌었네...",
+                        "attachments": [],
+                        "timestamp": "2026-06-19T12:10:00.731Z",
+                    },
+                },
+            ],
+            "timestamp": "2026-06-19T11:05:00.000000Z",
+        },
+    }
+    _write_design_chat(data_dir, "chat-interject", "Jamissue", [_plain_user_message(), assistant_msg])
+    result_dir = tmp_path / "result"
+
+    convert(data_dir, result_dir, dry_run=False)
+
+    text = (result_dir / "Jamissue" / "chat-interject.md").read_text(encoding="utf-8")
+    assert "아 여름 색깔 분홍계열로 금방 또 바뀌었네" in text
+
+
+def test_convert_mixes_standalone_and_project_chats(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write(data_dir, "conversations.json", [_standalone_conversation(uuid="conv-solo")])
+    _write_design_chat(data_dir, "chat-proj", "Jamissue", [_plain_user_message(), _agentic_assistant_message()])
+    result_dir = tmp_path / "result"
+
+    stats = convert(data_dir, result_dir, dry_run=False)
+
+    assert stats.sessions_found == 2
+    assert (result_dir / "conv-solo.md").exists()
+    assert (result_dir / "Jamissue" / "chat-proj.md").exists()
