@@ -136,6 +136,36 @@ def test_rebuild_with_explicit_vendor_list_skips_nonexistent_vendor_dir(tmp_path
     assert [s.session_id for s in index.list_sessions()] == ["s1"]
 
 
+def test_list_sessions_vendor_filter_is_case_insensitive(tmp_path):
+    _write_session(tmp_path / "gemini", "gemini", "s1", "a", "2024-01-01", _turns())
+
+    index = SessionIndex()
+    index.rebuild(tmp_path)
+
+    assert [s.session_id for s in index.list_sessions(vendor="Gemini")] == ["s1"]
+
+
+def test_search_sessions_vendor_filter_is_case_insensitive(tmp_path):
+    _write_session(tmp_path / "gemini", "gemini", "s1", "찾는말", "2024-01-01", _turns())
+
+    index = SessionIndex()
+    index.rebuild(tmp_path)
+
+    results = index.search_sessions("찾는말", vendor="GEMINI")
+    assert [s.session_id for s, _snippet in results] == ["s1"]
+
+
+def test_get_session_vendor_is_case_insensitive(tmp_path):
+    _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "제목", "2024-01-01", _turns())
+
+    index = SessionIndex()
+    index.rebuild(tmp_path)
+
+    record = index.get_session("ChatGPT", "s1")
+    assert record is not None
+    assert record.session_id == "s1"
+
+
 def test_search_sessions_vendor_filter_excludes_other_vendors(tmp_path):
     _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "찾는말", "2024-01-01", _turns())
     _write_session(tmp_path / "gemini", "gemini", "s2", "찾는말", "2024-01-02", _turns())

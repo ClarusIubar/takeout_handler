@@ -140,6 +140,28 @@ def test_sync_takeout_reports_skip_when_data_dir_not_configured(tmp_path):
     assert result.structured_content["chatgpt"]["skipped"] is True
 
 
+def test_get_session_markdown_format_works_with_mismatched_vendor_case(tmp_path):
+    _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "제목", "2024-01-01", _turns())
+    server = create_server(tmp_path)
+
+    result = _call_tool(server, "get_session", {"vendor": "ChatGPT", "session_id": "s1", "format": "markdown"})
+
+    assert result.is_error is False
+    assert result.content[0].text.startswith("---\n")
+
+
+def test_sync_takeout_accepts_mismatched_vendor_case(tmp_path, minimal_chatgpt_export):
+    data_dir = tmp_path / "data" / "chatgpt"
+    minimal_chatgpt_export(data_dir)
+    result_dir = tmp_path / "result"
+
+    server = create_server(result_dir, data_dirs={"chatgpt": data_dir})
+    result = _call_tool(server, "sync_takeout", {"vendor": "ChatGPT"})
+
+    assert result.is_error is False
+    assert result.structured_content["chatgpt"]["sessions_found"] == 1
+
+
 def test_get_session_markdown_format_raises_when_file_missing_from_disk(tmp_path):
     _write_session(tmp_path / "chatgpt", "chatgpt", "s1", "제목", "2024-01-01", _turns())
     server = create_server(tmp_path)

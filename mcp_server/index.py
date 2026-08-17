@@ -42,7 +42,8 @@ class SessionIndex:
                 self._sessions.append(record)
 
     def list_sessions(self, vendor=None, limit=50, offset=0):
-        items = [s for s in self._sessions if vendor is None or s.vendor_tag == vendor]
+        vendor = vendor.lower() if vendor else None
+        items = [s for s in self._sessions if vendor is None or s.vendor_tag.lower() == vendor]
         items.sort(key=lambda s: s.date, reverse=True)
         return items[offset:offset + limit]
 
@@ -50,9 +51,10 @@ class SessionIndex:
         """제목 또는 turn 텍스트에 query가 (대소문자 무시) 부분 문자열로 들어있는 세션을
         찾는다. 반환값: [(SessionRecord, matched_snippet)]. 임베딩/시맨틱 검색은 하지 않는다."""
         needle = query.lower()
+        vendor = vendor.lower() if vendor else None
         results = []
         for s in self._sorted_for_search():
-            if vendor is not None and s.vendor_tag != vendor:
+            if vendor is not None and s.vendor_tag.lower() != vendor:
                 continue
             if date_from is not None and s.date < date_from:
                 continue
@@ -73,7 +75,7 @@ class SessionIndex:
 
     def get_session(self, vendor, session_id):
         for s in self._sessions:
-            if s.vendor_tag == vendor and s.session_id == session_id:
+            if s.vendor_tag.lower() == vendor.lower() and s.session_id == session_id:
                 return s
         return None
 

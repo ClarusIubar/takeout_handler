@@ -69,7 +69,15 @@ def create_server(result_dir, data_dirs=None, name="takeout-handler"):
         date_to: str | None = None,
         limit: int = 20,
     ) -> list[dict]:
-        """제목 또는 turn 텍스트에 대한 단순 부분 문자열 검색 (대소문자 무시, 임베딩 검색 아님)."""
+        """제목 또는 turn 텍스트에 대한 단순 부분 문자열 검색이다 (대소문자 무시, 임베딩
+        검색 아님). 검색어가 우연히 텍스트에 포함되기만 해도 결과에 걸리므로, 실제로는
+        사용자가 찾는 것과 무관한 항목이 섞여 나올 수 있다 — 각 결과의 matched_snippet과
+        title을 반드시 확인해서 실제로 관련 있는 항목만 사용자에게 보고하고, 단어만
+        겹치고 맥락이 다른 항목은 걸러내라. 사용자가 특정 벤더(예: ChatGPT, Gemini)를
+        언급하면 그걸 vendor 파라미터에 반영해서 검색 범위를 좁혀라. matched_snippet은
+        문맥 확인용 짧은 미리보기일 뿐 전체 내용이 아니다 — 사용자가 정확한/전체
+        내용(예: 체크리스트 항목, 구체적인 수치)을 원하면 snippet만으로 답하지 말고
+        session_id로 get_session을 마저 호출해 전체 turn을 읽어라."""
         results = index.search_sessions(query, vendor=vendor, date_from=date_from, date_to=date_to, limit=limit)
         return [{**_session_summary(s), "matched_snippet": snippet} for s, snippet in results]
 
@@ -83,7 +91,10 @@ def create_server(result_dir, data_dirs=None, name="takeout-handler"):
         if s is None:
             raise ValueError(f"세션을 찾을 수 없음: {vendor}/{session_id}")
         if format == "markdown":
-            md_path = result_dir / vendor / f"{session_id}.md"
+            # 실제 디렉터리명은 항상 s.vendor_tag(index가 이미 대소문자 무시하고 찾아준
+            # 정식 값) 기준이다 — 호출자가 넘긴 vendor 원문(예: "Gemini")을 그대로 쓰면
+            # 대소문자가 다를 때 파일을 못 찾을 수 있다.
+            md_path = result_dir / s.vendor_tag / f"{session_id}.md"
             if not md_path.exists():
                 raise ValueError(f"세션 마크다운 파일을 찾을 수 없음: {md_path}")
             return md_path.read_text(encoding="utf-8")
@@ -95,7 +106,7 @@ def create_server(result_dir, data_dirs=None, name="takeout-handler"):
         조회 인덱스를 새로고침한다(dry_run이면 새로고침하지 않음). 이 서버에서 유일하게
         부작용이 있는 tool이다."""
         vendors = discover_vendors()
-        targets = [vendor] if vendor else list(vendors)
+        targets = [vendor.lower()] if vendor else list(vendors)
         unknown = [v for v in targets if v not in vendors]
         if unknown:
             raise ValueError(f"알 수 없는 벤더: {', '.join(unknown)} (사용 가능: {', '.join(sorted(vendors))})")
