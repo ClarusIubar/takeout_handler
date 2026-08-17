@@ -89,6 +89,77 @@ def minimal_gemini_export():
     return _build_gemini_export
 
 
+def _build_claude_export(dir_path, standalone_uuid="conv-solo", project_uuid="chat-proj",
+                          project_name="Jamissue"):
+    """detect()와 convert() 양쪽을 통과하는 최소 Claude export를 dir_path 아래에 만든다.
+    conversations.json(일반 대화 1개)과 design_chats/<uuid>.json(프로젝트 대화 1개)을
+    둘 다 포함해서, 두 스키마가 실제로는 같은 convert() 배선을 함께 탄다는 걸 검증한다."""
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    standalone_payload = [
+        {
+            "uuid": standalone_uuid,
+            "name": "일반 대화",
+            "created_at": "2026-06-01T12:00:00.000000+00:00",
+            "chat_messages": [
+                {
+                    "uuid": "m-1", "sender": "human",
+                    "created_at": "2026-06-01T12:00:00.000000+00:00",
+                    "content": [{"type": "text", "text": "질문입니다"}],
+                },
+                {
+                    "uuid": "m-2", "sender": "assistant",
+                    "created_at": "2026-06-01T12:00:01.000000+00:00",
+                    "content": [
+                        {"type": "thinking", "thinking": "생각 중"},
+                        {"type": "text", "text": "답변입니다"},
+                    ],
+                },
+            ],
+        }
+    ]
+    (dir_path / "conversations.json").write_text(
+        json.dumps(standalone_payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    design_chats_dir = dir_path / "design_chats"
+    design_chats_dir.mkdir(parents=True, exist_ok=True)
+    project_payload = {
+        "uuid": project_uuid,
+        "title": "프로젝트 대화",
+        "project": {"uuid": f"proj-{project_name}", "name": project_name},
+        "created_at": "2026-06-19T11:00:00.000000Z",
+        "messages": [
+            {
+                "uuid": "u-1", "role": "user",
+                "content": {"content": "저장소를 확인해줘", "timestamp": "2026-06-19T11:00:00.000000Z"},
+            },
+            {
+                "uuid": "a-1", "role": "assistant",
+                "content": {
+                    "contentBlocks": [
+                        {"type": "text", "text": "확인했습니다"},
+                        {"type": "tool_call", "toolCall": {"name": "github_list_repos", "input": {}, "output": "1개"}},
+                    ],
+                    "timestamp": "2026-06-19T11:05:00.000000Z",
+                },
+            },
+        ],
+    }
+    (design_chats_dir / f"{project_uuid}.json").write_text(
+        json.dumps(project_payload, ensure_ascii=False), encoding="utf-8"
+    )
+    return dir_path
+
+
+@pytest.fixture
+def minimal_claude_export():
+    """`minimal_claude_export(dir_path, standalone_uuid=..., project_uuid=..., project_name=...)`
+    로 호출하는 팩토리 fixture. conversations.json(일반 대화)과 design_chats/*.json
+    (프로젝트 대화)을 하나씩 만든다."""
+    return _build_claude_export
+
+
 @pytest.fixture
 def patched_config_path(monkeypatch, tmp_path):
     """run.main()이 무조건 호출하는 load_config()가 실제 프로젝트의 config.json을
