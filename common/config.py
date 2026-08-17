@@ -20,7 +20,7 @@ DEFAULTS = {
     "markdown_output_dir": "result",
     # 미설정(None)이면 --publish 실행 시 안내만 하고 아무 데도 안 씀
     "obsidian_vault_dir": None,
-    "vault_subdirs": {"chatgpt": "ChatGPT", "gemini": "Gemini"},
+    "vault_subdirs": {"chatgpt": "ChatGPT", "gemini": "Gemini", "claude": "Claude"},
 }
 
 

@@ -2,11 +2,11 @@
 
 [한국어](README.md) | English
 
-A unified pipeline that converts ChatGPT / Gemini takeout exports into
-Obsidian-compatible markdown. Each vendor's raw export format is completely
-different, so parsing logic is split per vendor, but shared logic — code-fence
-safety, frontmatter assembly, callout formatting — lives in `common/` and is
-reused by both.
+A unified pipeline that converts ChatGPT / Gemini / Claude takeout exports
+into Obsidian-compatible markdown. Each vendor's raw export format is
+completely different, so parsing logic is split per vendor, but shared logic
+— code-fence safety, frontmatter assembly, callout formatting — lives in
+`common/` and is reused by all of them.
 
 ## Usage
 
@@ -17,7 +17,8 @@ reused by both.
    ```
    data/
    ├── chatgpt/   # ChatGPT's Data export zip as-is, or its unzipped contents
-   └── gemini/    # Google Takeout zip as-is, or its unzipped contents
+   ├── gemini/    # Google Takeout zip as-is, or its unzipped contents
+   └── claude/    # Claude's (Anthropic) data export zip as-is, or its unzipped contents
    ```
 
    If `run.py` can't find the files it needs in a vendor's folder, it
@@ -38,6 +39,17 @@ reused by both.
      `Takeout/<service name>/`, with `My Activity.html` and attached media
      files sitting side by side inside it. Just drop the whole `Takeout/`
      folder into `data/gemini/` (no need to dig into subfolders yourself).
+   - **Claude** (the zip from "Settings → Account → Export data"): the top
+     level of the archive has `conversations.json` (all conversations that
+     aren't attached to a project, as one array), `design_chats/` (one file
+     per conversation that *is* attached to a project), `projects/` (project
+     metadata, when present), and so on. If your account has a lot of data
+     this can come split into multiple parts, e.g.
+     `data-...-batch-0000.zip` — **only a single part is supported right
+     now**. Extracting several parts into the same folder would make later
+     parts silently overwrite the earlier parts' `conversations.json`/
+     `design_chats/`, losing conversations, so if you have multiple parts
+     you need to process each one separately.
 
 2. Run it.
 
@@ -46,10 +58,10 @@ reused by both.
    ```
 
    Only vendors whose presence is detected under `data/` are automatically
-   picked and run. To run a specific vendor only, pass `--vendor chatgpt` or
-   `--vendor gemini`. Add `--dry-run` to preview parsing results (session
-   count, skip count, attachment resolve success/failure counts) in the
-   console without creating any actual files.
+   picked and run. To run a specific vendor only, pass `--vendor chatgpt`,
+   `--vendor gemini`, or `--vendor claude`. Add `--dry-run` to preview
+   parsing results (session count, skip count, attachment resolve
+   success/failure counts) in the console without creating any actual files.
 
    If you don't want to move the raw export into `data/<vendor>/` (e.g. you
    want to use a zip that's still sitting in your Downloads folder as-is),
@@ -66,7 +78,11 @@ reused by both.
    while only its contents are extracted into `data/<vendor>/`.
 
 3. Results are generated under `result/<vendor>/*.md` (+
-   `result/<vendor>/Attachments/`).
+   `result/<vendor>/Attachments/`). Claude is the exception: conversations
+   attached to a project are generated under
+   `result/claude/<project name>/*.md`, one subfolder per project, while
+   conversations that aren't attached to a project go straight into
+   `result/claude/*.md` like the other vendors.
 
 4. Once you've reviewed them, run with `--publish` to apply them to your
    actual Obsidian vault (see "Configuration" below). Conversion (step 2)
@@ -88,10 +104,10 @@ auto-created with default values in the project root on first run (see
 
 ```json
 {
-  "takeout_paths": { "chatgpt": "", "gemini": "" },
+  "takeout_paths": { "chatgpt": "", "gemini": "", "claude": "" },
   "markdown_output_dir": "result",
   "obsidian_vault_dir": "",
-  "vault_subdirs": { "chatgpt": "ChatGPT", "gemini": "Gemini" }
+  "vault_subdirs": { "chatgpt": "ChatGPT", "gemini": "Gemini", "claude": "Claude" }
 }
 ```
 
@@ -109,11 +125,15 @@ time.
 
 When applying to the vault with `--publish`, a per-vendor subfolder is
 auto-created using the names configured in `vault_subdirs`
-(`<vault>/ChatGPT/`, `<vault>/Gemini/`). It's **simple mirroring** — upserts
-are based purely on the `vault_dir/<vendor_subdir>/<filename>` location, so
+(`<vault>/ChatGPT/`, `<vault>/Gemini/`, `<vault>/Claude/`). It's **simple
+mirroring** — upserts are based purely on the
+`vault_dir/<vendor_subdir>/<filename>` location (for Claude project
+conversations, `vault_dir/<vendor_subdir>/<project name>/<filename>`), so
 if you move or rename a note inside your vault, that move isn't tracked; if
 that session's content changes later, a new note may be created at the
-original location rather than wherever you moved it.
+original location rather than wherever you moved it. For the same reason,
+if a Claude project gets renamed later, a new subfolder is created and the
+old subfolder's file becomes orphaned.
 
 ### Exit codes
 
@@ -152,6 +172,13 @@ doesn't provide a per-conversation title (see the wiki's
 [Output Format](https://github.com/ClarusIubar/takeout_handler/wiki/Output-Format-en)
 for the design reasoning).
 
+**Out of scope for Claude**: `memories.json` (memory feature summaries),
+`login_history.json`, `users.json` (account info), and the `docs` field
+inside `projects/*.json` (project knowledge files) aren't conversations, so
+none of them get converted. This export never contains actual attachment
+bytes (only reference filenames), so attachments always show up as a
+"missing" notice.
+
 ## Requirements
 
 The runtime pipeline itself uses only the standard library (Python 3.10+).
@@ -161,21 +188,24 @@ requirements-dev.txt` (adds only pytest).
 ## Structure
 
 ```
-common/                  # Logic shared by both vendors
+common/                  # Logic shared across vendors
 ├── markdown_safety.py     # code-fence safety net
 ├── text.py                 # first_sentence / yaml_quote / sanitize_filename / format_callout
 ├── session_markdown.py    # frontmatter + callout markdown assembly, content_hash compute/extract
 ├── attachment_cache.py    # shared attachment resolver skeleton (caching, dry-run copy, tallying)
-├── attachment_types.py    # attachment extension classification (embeddability etc, shared by both vendors)
+├── attachment_types.py    # attachment extension classification (embeddability etc, shared across vendors)
 ├── zip_extract.py          # extracts *.zip in data/<vendor>/ in place (includes zip-slip defense)
 ├── fs_discovery.py         # filters archive-tool junk paths like __MACOSX, handles candidate ambiguity
 ├── upsert.py                # content_hash-comparison-based upsert writes (for result/)
-├── publish.py                # result/ -> real vault mirroring (for --publish, reuses upsert)
+├── publish.py                # result/ -> real vault mirroring (for --publish, reuses upsert,
+│                             #   recursively mirrors result_dir subfolders)
 └── config.py                  # config.json loader (creates with defaults if missing)
 vendors/
 ├── base.py               # vendor module interface contract (Protocol) + runtime validation + auto-discovery
 ├── chatgpt.py             # conversations*.json tree parsing + .dat attachment recovery
-└── gemini.py               # "My Activity.html" block parsing + local attachment matching
+├── gemini.py               # "My Activity.html" block parsing + local attachment matching
+└── claude.py               # parses conversations.json (non-project chats) + design_chats/*.json
+                            #   (project-attached agentic chats, a different schema)
 run.py                    # CLI: config loading + path priority resolution + vendor execution + publishing
 config.example.json       # example config.json shape (the real config.json is .gitignore'd)
 tests/                    # pytest -- pure functions in common/ + vendor parsing logic (tree branch
