@@ -82,3 +82,20 @@ def test_publish_vendor_dry_run_does_not_write(tmp_path):
 def test_publish_vendor_missing_result_dir_returns_zero_stats(tmp_path):
     stats = publish_vendor(tmp_path / "does-not-exist", tmp_path / "vault", dry_run=False)
     assert stats == {"created": 0, "updated": 0, "unchanged": 0, "attachments_copied": 0}
+
+
+def test_publish_vendor_mirrors_project_subfolders(tmp_path):
+    # Claude 벤더처럼 result_dir 안에 프로젝트별 하위 폴더가 섞여 있는 경우 —
+    # 최상위 파일과 하위 폴더 파일 둘 다 vault_dir에 같은 상대 경로로 미러링돼야 한다.
+    result_dir = tmp_path / "result"
+    vault_dir = tmp_path / "vault"
+    _write_note(result_dir, "z.md", "hash-z")
+    _write_note(result_dir / "project_a", "x.md", "hash-x")
+    _write_note(result_dir / "project_b", "y.md", "hash-y")
+
+    stats = publish_vendor(result_dir, vault_dir, dry_run=False)
+
+    assert stats["created"] == 3
+    assert (vault_dir / "z.md").exists()
+    assert (vault_dir / "project_a" / "x.md").exists()
+    assert (vault_dir / "project_b" / "y.md").exists()
