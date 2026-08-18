@@ -134,6 +134,20 @@ def test_excludes_recognizes_marker_beyond_default_window_in_long_explanation():
     assert ok is True
 
 
+def test_excludes_recognizes_적절하지_않다_phrasing():
+    # 실측(gemma-4-12b-it, TSK-002-16): "career-chat-1 세션에서도 'asyncio'라는
+    # 단어가 언급되지만... 기술적인 asyncio 관련 대화로는 적절하지 않습니다"처럼
+    # 명확히 배제하는 답변인데도, "적절하지 않다"류 표현이 마커 목록에 없어서
+    # excludes()가 실패로 잡았다.
+    check = excludes("career-chat-1")
+    ok, _note = check(
+        "참고로, 'career-chat-1' 세션에서도 'asyncio'라는 단어가 언급되지만, "
+        "해당 내용은 커리어 고민 중 비동기 개념의 어려움을 언급한 것이므로 "
+        "기술적인 asyncio 관련 대화로는 적절하지 않습니다."
+    )
+    assert ok is True
+
+
 def test_excludes_recognizes_polite_conjugation_of_아니다():
     # 실측(qwen/qwen3.8-27b, TSK-002-15): 모델이 실제로 "...요리 관련 내용은
     # 아닙니다"라고 정확히 설명했는데 excludes()가 실패로 잡았다 — "아니다"의 존댓말
@@ -358,13 +372,16 @@ def test_keyword_search_rejects_decoy_that_only_superficially_matches():
     assert ok2 is False
 
 
-def test_keyword_search_allows_two_rounds():
+def test_keyword_search_allows_three_rounds():
     # 실측(qwen/qwen3.8-27b, TSK-002-15): search_sessions로 후보를 얻은 뒤
     # get_session으로 asyncio-1/career-chat-1을 마저 읽어 검증하려는 정당한 시도가
     # max_tool_rounds=1이라 두 번째 라운드를 못 받고, 파싱 안 된 tool-call 텍스트가
-    # 최종 답변 자리에 그대로 샜다 — date_ranged_search와 같은 클래스의 버그.
+    # 최종 답변 자리에 그대로 샜다 — date_ranged_search와 같은 클래스의 버그(2로 상향).
+    # 이후(TSK-002-16) SYSTEM_PROMPT가 "후보를 전부 get_session으로 확인해라"를
+    # 무조건화하면서, get_session 2건을 별도 라운드로 나눠 부르는 시행에서 2라운드로도
+    # 부족한 재발 사례가 나와 3으로 다시 상향.
     task = next(t for t in TASKS if t.id == "keyword_search")
-    assert task.max_tool_rounds >= 2
+    assert task.max_tool_rounds >= 3
 
 
 def test_keyword_search_tool_usage_allows_get_session_verification():

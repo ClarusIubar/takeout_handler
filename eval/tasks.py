@@ -163,7 +163,9 @@ def not_contains(*substrings):
 # "아니"만 넣으면 "아닙니다"(존댓말 활용형: 니+ㅂ이 "닙"으로 합쳐지는 불규칙 활용이라
 # "아니"가 문자열 그대로 안 들어있음 — 실측으로 발견된 함정)를 놓친다. "아니"와
 # "아닙"을 모두 넣어 두 활용 계열을 다 잡는다.
-_EXCLUSION_MARKERS = ("제외", "무관", "아니", "아닙", "포함하지", "관련 없", "관련이 없")
+_EXCLUSION_MARKERS = (
+    "제외", "무관", "아니", "아닙", "포함하지", "관련 없", "관련이 없", "적절하지",
+)
 
 
 def excludes(*forbidden_ids, window=160):
@@ -314,8 +316,10 @@ TASKS = [
         # get_session으로 asyncio-1/career-chat-1을 마저 읽어 검증하려는 정당한 시도가
         # max_tool_rounds=1이라 두 번째 라운드를 못 받고, 파싱 안 된 tool-call 텍스트가
         # 최종 답변 자리에 그대로 샜다 — date_ranged_search와 같은 클래스의 하네스
-        # 라운드 부족 버그였다.
-        max_tool_rounds=2,
+        # 라운드 부족 버그였다(2로 상향). 이후(TSK-002-16) SYSTEM_PROMPT가 후보 전부
+        # get_session으로 확인하도록 무조건화하면서, get_session 2건을 별도 라운드로
+        # 나눠 부르는 시행에서 2라운드로도 부족한 재발 사례가 나와 3으로 재상향.
+        max_tool_rounds=3,
     ),
     EvalTask(
         id="date_ranged_search",

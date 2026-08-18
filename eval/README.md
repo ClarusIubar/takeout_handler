@@ -286,6 +286,13 @@ R = reliability 태스크(pass^k 대상, `--reliability` 플래그로만 k회 �
 [연구 노트](https://github.com/ClarusIubar/takeout_handler/wiki/MCP-Experiment#10)
 §10 참고.
 
+**추가 발견(TSK-002-16)**: 위 수정 뒤에도 `keyword_search`가 검증(`get_session`)은
+하지 않고 decoy를 정답처럼 나열하는 사례가 1건 남아 있었다. `SYSTEM_PROMPT` 문구를
+근거 없이 두 번 바꿔봤지만(조건부/무조건부 검증 지시) 둘 다 실패했다 — 1차 출처
+(야오 외, 2022의 리액트 기법)를 근거로, "검증해라"만으론 부족하고 "검증한 결과를
+후보마다 명시적으로 판정해라"는 중간 추론 단계를 강제해야 한다는 걸 확인하고
+반영해 실제로 개선됐다(10회 시행 중 약 9회로). 자세한 내용은 위키 §11 참고.
+
 **시스템 프롬프트가 통제 안 된 교란변수다.** `eval/harness.py::SYSTEM_PROMPT`에는
 이미 "제목/본문을 실제로 읽고 판단하라", "session_id를 명시하라" 같은 태스크 관련
 지침이 들어 있다. 이 문구는 `mcp_server/server.py`의 tool description에 나중에
