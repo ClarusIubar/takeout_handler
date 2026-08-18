@@ -266,12 +266,25 @@ R = reliability 태스크(pass^k 대상, `--reliability` 플래그로만 k회 �
 없다. 완전한 해결(여러 개의 서로 다른 표면 단서를 가진 decoy를 다양화해서 통계적으로
 가려내는 것)은 이번 범위 밖이다.
 
-`vendor_filtered_search`(decoy `weekend-plan-1`)도 `date_ranged_search`와 같은
-패턴으로 가끔 실패한다 — 위의 `max_tool_rounds` 수정 전에는 스키마 위반 실패가
-먼저 걸려서 이 decoy 실패가 가려져 있었을 뿐, 새로 생긴 문제가 아니다. 시스템
-프롬프트와 tool description 둘 다 이미 "제목/본문을 읽고 판단하라"고 지시하는데도
-남는 실패라, 이 fixture에만 맞춰 문구를 더 특정하게 다듬는 건 eval 자체를 그 fixture에
-overfitting시키는 것이라 하지 않는다 — 정직하게 남겨둔 모델 한계로 취급한다.
+**정정(TSK-002-15)**: 위 문단은 `date_ranged_search`/`vendor_filtered_search`
+(decoy `travel-savings-1`/`weekend-plan-1`)의 반복 실패를 "정직하게 남겨둔 모델
+한계"로 결론지었었는데, 크로스 모델 비교(`qwen/qwen3.8-27b`)로 실제 재검증한 결과
+**틀린 결론이었다**. 진짜 원인은 세 가지였다:
+1. `keyword_search`/`date_ranged_search`도 `max_tool_rounds=1`이라, 후보를
+   `get_session`으로 마저 읽어 검증하려는 정당한 시도가 두 번째 라운드를 못 받고
+   파싱 안 된 tool-call 텍스트가 최종 답변 자리에 그대로 샜다(하네스 버그) — 2로
+   상향, `check_tool_usage`의 허용 tool 목록에 `get_session` 추가.
+2. `not_contains(decoy)` 채점 자체가 결함이었다 — 모델이 decoy를 정확히 판단하고
+   "왜 제외했는지" 설명하려고 그 id를 언급하기만 해도 실패로 잡았다(`vendor_filtered_search`는
+   qwen이 두 번 다 정확히 판단하고 설명까지 했는데도 이 결함으로 실패 처리됨). 배제
+   신호 표현(`제외`/`무관`/`아니` 등)이 근처에 있는지 보는 `excludes()`로 교체.
+3. `date_ranged_search`의 프롬프트("여행 관련 대화")가 실제로 모호했다 — 저축
+   계획도 넓게 "여행 관련"이라는 해석이 억지가 아니었다. "여행 일정"으로 좁혀 해소.
+
+즉 이 세 태스크의 반복 실패는 대부분 하네스/채점 설계 문제였지, "약한 모델의 한계라
+안 건드린다"는 판단 자체가 틀렸다. 자세한 조사 과정은 위키
+[연구 노트](https://github.com/ClarusIubar/takeout_handler/wiki/MCP-Experiment#10)
+§10 참고.
 
 **시스템 프롬프트가 통제 안 된 교란변수다.** `eval/harness.py::SYSTEM_PROMPT`에는
 이미 "제목/본문을 실제로 읽고 판단하라", "session_id를 명시하라" 같은 태스크 관련

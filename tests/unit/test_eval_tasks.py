@@ -2,6 +2,7 @@ from eval.tasks import (
     TASKS,
     ToolCallRecord,
     contains,
+    excludes,
     expect_any_tool_path,
     expect_calls_covering,
     expect_never_called,
@@ -100,6 +101,85 @@ def test_not_contains_passes_when_absent():
     check = not_contains("kyoto-trip-1")
     ok, _note = check("정답은 osaka-trip-1입니다")
     assert ok is True
+
+
+def test_not_contains_fails_even_when_model_explicitly_excludes_it():
+    # 실측(qwen/qwen3.8-27b, TSK-002-15): 모델이 decoy를 정확히 판단하고 "왜
+    # 제외했는지"까지 설명했는데도, 그 id를 언급하기만 하면 not_contains는 실패로
+    # 잡는다 — 이게 바로 excludes()가 고치려는 결함이다(회귀 고정용).
+    check = not_contains("weekend-plan-1")
+    ok, _note = check(
+        "요리 관련 대화는 kimchi-recipe-1뿐입니다. 참고로 weekend-plan-1도 "
+        "'요리'라는 단어가 나오지만 실제로는 무관해서 제외했습니다."
+    )
+    assert ok is False
+
+
+def test_excludes_fails_when_forbidden_id_presented_without_exclusion_marker():
+    check = excludes("kyoto-trip-1")
+    ok, note = check("정답은 kyoto-trip-1입니다")
+    assert ok is False
+    assert "kyoto-trip-1" in note
+
+
+def test_excludes_recognizes_marker_beyond_default_window_in_long_explanation():
+    # 실측(qwen/qwen3.8-27b, TSK-002-15): 모델이 왜 제외했는지 길게 설명하면(부연
+    # 설명이 붙는 실제 관찰된 패턴) 배제 신호가 id로부터 80자보다 더 멀리 나올 수
+    # 있다 — 이 경우 실제로 86자 떨어져 있어서 window=80이면 놓친다.
+    check = excludes("career-chat-1")
+    ok, _note = check(
+        "career-chat-1) 대화에서도 asyncio가 언급되긴 하지만, 커리어 상담 중 "
+        "비동기 개념이 어렵다는 언급이 잠깐 나온 것뿐이라 asyncio에 대한 대화는 아닙니다."
+    )
+    assert ok is True
+
+
+def test_excludes_recognizes_polite_conjugation_of_아니다():
+    # 실측(qwen/qwen3.8-27b, TSK-002-15): 모델이 실제로 "...요리 관련 내용은
+    # 아닙니다"라고 정확히 설명했는데 excludes()가 실패로 잡았다 — "아니다"의 존댓말
+    # 활용형 "아닙니다"는 니+ㅂ이 "닙"으로 합쳐지는 불규칙 활용이라 "아니"가 문자열
+    # 그대로 안 들어있다("아니"+"다"였다면 있었겠지만 "아니"+"ㅂ니다"→"아닙니다"라
+    # substring이 아님). 정규식 하드코딩의 실제 함정 사례.
+    check = excludes("weekend-plan-1")
+    ok, _note = check(
+        "참고로 \"주말 계획 정리\"(weekend-plan-1) 대화에서도 '요리'라는 단어가 "
+        "나오긴 하지만, 실제로는 주말 계획에 대한 대화라 요리 관련 내용은 아닙니다."
+    )
+    assert ok is True
+
+
+def test_excludes_passes_when_forbidden_id_mentioned_with_exclusion_marker():
+    check = excludes("weekend-plan-1")
+    ok, _note = check(
+        "요리 관련 대화는 kimchi-recipe-1뿐입니다. 참고로 weekend-plan-1도 "
+        "'요리'라는 단어가 나오지만 실제로는 무관해서 제외했습니다."
+    )
+    assert ok is True
+
+
+def test_excludes_passes_when_forbidden_id_absent_entirely():
+    check = excludes("weekend-plan-1")
+    ok, _note = check("요리 관련 대화는 kimchi-recipe-1뿐입니다.")
+    assert ok is True
+
+
+def test_excludes_fails_if_any_occurrence_lacks_marker():
+    # 같은 id가 두 번(서로 window 밖으로 멀리 떨어져) 나오는데 한쪽엔 배제 신호가
+    # 없으면 실패로 본다(보수적 판정) — window가 겹치면 뒤쪽 신호가 앞쪽까지 오염시킬
+    # 수 있으므로 충분히 떨어뜨려 검증한다.
+    filler = "그 사이에 다른 이야기를 길게 채워 넣습니다. " * 10
+    check = excludes("weekend-plan-1")
+    ok, _note = check(
+        f"weekend-plan-1도 후보에 있습니다. {filler} "
+        "weekend-plan-1은 요리와 무관해서 제외했습니다."
+    )
+    assert ok is False
+
+
+def test_excludes_also_normalizes_unicode_dashes():
+    check = excludes("kyoto-trip-1")
+    ok, _note = check("정답은 kyoto‑trip‑1입니다")  # 비분리 하이픈
+    assert ok is False
 
 
 def test_task_list_has_fourteen_unique_ids():
@@ -276,7 +356,27 @@ def test_keyword_search_rejects_decoy_that_only_superficially_matches():
 
     ok2, note2 = task.check_final_answer("career-chat-1 세션에 asyncio 관련 내용이 있습니다.")
     assert ok2 is False
-    assert "career-chat-1" in note2
+
+
+def test_keyword_search_allows_two_rounds():
+    # 실측(qwen/qwen3.8-27b, TSK-002-15): search_sessions로 후보를 얻은 뒤
+    # get_session으로 asyncio-1/career-chat-1을 마저 읽어 검증하려는 정당한 시도가
+    # max_tool_rounds=1이라 두 번째 라운드를 못 받고, 파싱 안 된 tool-call 텍스트가
+    # 최종 답변 자리에 그대로 샜다 — date_ranged_search와 같은 클래스의 버그.
+    task = next(t for t in TASKS if t.id == "keyword_search")
+    assert task.max_tool_rounds >= 2
+
+
+def test_keyword_search_tool_usage_allows_get_session_verification():
+    task = next(t for t in TASKS if t.id == "keyword_search")
+    calls = [
+        _call("search_sessions", {"query": "asyncio"},
+              structured_content={"result": [{"session_id": "asyncio-1"}, {"session_id": "career-chat-1"}]}),
+        _call("get_session", {"vendor": "chatgpt", "session_id": "asyncio-1"}),
+        _call("get_session", {"vendor": "chatgpt", "session_id": "career-chat-1"}),
+    ]
+    ok, _note = task.check_tool_usage(calls)
+    assert ok is True
 
 
 def test_vendor_filtered_search_rejects_decoy():
@@ -451,3 +551,48 @@ def test_date_ranged_search_rejects_travel_savings_decoy():
 
     ok2, _note2 = task.check_final_answer("kyoto-trip-1, osaka-trip-1, travel-savings-1에 있습니다.")
     assert ok2 is False
+
+
+def test_date_ranged_search_allows_two_rounds():
+    # 실측(qwen/qwen3.8-27b): 검색 후보를 얻은 다음 get_session으로 3건 전부 읽어
+    # 검증하려는 정당한 시도가 max_tool_rounds=1이라 두 번째 라운드를 못 얻고, 그
+    # 결과 최종 답변 자리에 파싱 안 된 tool-call 텍스트가 그대로 새어나왔다(진짜
+    # 관련성 판단 실패가 아니라 하네스의 라운드 부족이었다 — vendor_filtered_search/
+    # sync_takeout_legitimate_refresh와 같은 클래스의 버그).
+    task = next(t for t in TASKS if t.id == "date_ranged_search")
+    assert task.max_tool_rounds >= 2
+
+
+def test_date_ranged_search_tool_usage_allows_get_session_verification():
+    # search_sessions로 후보를 얻은 뒤 get_session으로 전체 내용을 읽어 확인하는 것도
+    # 정당한 경로다(ambiguous_disambiguation과 동일한 정신) — get_session을 썼다는
+    # 이유만으로 실패시키면 안 된다.
+    task = next(t for t in TASKS if t.id == "date_ranged_search")
+    calls = [
+        _call("search_sessions", {"query": "여행", "date_from": "2026-07-01", "date_to": "2026-07-31"},
+              structured_content={"result": [
+                  {"session_id": "osaka-trip-1"}, {"session_id": "kyoto-trip-1"}, {"session_id": "travel-savings-1"},
+              ]}),
+        _call("get_session", {"vendor": "gemini", "session_id": "osaka-trip-1"}),
+        _call("get_session", {"vendor": "gemini", "session_id": "kyoto-trip-1"}),
+        _call("get_session", {"vendor": "gemini", "session_id": "travel-savings-1"}),
+    ]
+    ok, _note = task.check_tool_usage(calls)
+    assert ok is True
+
+
+def test_vendor_filtered_search_tool_usage_allows_get_session_verification():
+    # 실측(qwen/qwen3.8-27b): search_sessions 두 번으로 후보를 좁힌 뒤 get_session으로
+    # kimchi-recipe-1/weekend-plan-1 둘 다 읽어서 weekend-plan-1을 정확히 걸러냈다
+    # (실제로 관련성 판단은 완벽했음) — 그런데도 get_session이 allowed_names에 없어서
+    # tool_pass가 실패 처리됐다. get_session 검증도 정당한 경로로 인정해야 한다.
+    task = next(t for t in TASKS if t.id == "vendor_filtered_search")
+    calls = [
+        _call("search_sessions", {"query": "요리", "vendor": "Gemini"}),
+        _call("search_sessions", {"query": "레시피", "vendor": "Gemini"},
+              structured_content={"result": [{"session_id": "kimchi-recipe-1"}]}),
+        _call("get_session", {"vendor": "gemini", "session_id": "kimchi-recipe-1"}),
+        _call("get_session", {"vendor": "gemini", "session_id": "weekend-plan-1"}),
+    ]
+    ok, _note = task.check_tool_usage(calls)
+    assert ok is True

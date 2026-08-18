@@ -154,6 +154,41 @@ def not_contains(*substrings):
     return check
 
 
+# 실측(qwen/qwen3.8-27b, TSK-002-15): 모델이 decoy를 정확히 판단하고 "왜 제외했는지"
+# 설명하려면 그 session_id를 언급할 수밖에 없는데, not_contains()는 "정답으로 제시함"과
+# "언급하되 배제한다고 설명함"을 구분 못 해서 후자도 실패로 잡는다 — 실제로 관련성
+# 판단이 완벽했던 시행이 채점 로직 결함 때문에 "모델의 한계"로 오판될 뻔했다.
+# LLM-as-judge는 여전히 안 쓴다(픽스처를 직접 통제하므로 결정론적 비교로 충분하다는
+# 이 프로젝트의 원칙 유지) — 대신 등장 지점 주변에 배제 신호 표현이 있는지만 본다.
+# "아니"만 넣으면 "아닙니다"(존댓말 활용형: 니+ㅂ이 "닙"으로 합쳐지는 불규칙 활용이라
+# "아니"가 문자열 그대로 안 들어있음 — 실측으로 발견된 함정)를 놓친다. "아니"와
+# "아닙"을 모두 넣어 두 활용 계열을 다 잡는다.
+_EXCLUSION_MARKERS = ("제외", "무관", "아니", "아닙", "포함하지", "관련 없", "관련이 없")
+
+
+def excludes(*forbidden_ids, window=160):
+    """forbidden_id가 텍스트에 아예 없으면 통과(not_contains와 동일). 등장하면, 그
+    지점 앞뒤 window자 안에 배제 신호 표현이 있는지 확인해서 "설명하며 배제함"(통과)과
+    "정답처럼 제시함"(실패)을 구분한다. 같은 id가 여러 번 나오면 전부 배제 신호가
+    있어야 통과 — 한 번이라도 신호 없이 등장하면 실패(보수적 판정)."""
+    def check(text):
+        text = _normalize_dashes(text)
+        bad = []
+        for fid in forbidden_ids:
+            search_from = 0
+            while True:
+                pos = text.find(fid, search_from)
+                if pos == -1:
+                    break
+                nearby = text[max(0, pos - window):pos + len(fid) + window]
+                if not any(marker in nearby for marker in _EXCLUSION_MARKERS):
+                    bad.append(fid)
+                    break
+                search_from = pos + len(fid)
+        return (not bad), ("ok" if not bad else f"배제 표현 없이 언급됨(정답처럼 제시된 것으로 판단): {bad}")
+    return check
+
+
 def all_checks(*checks):
     """여러 (bool, note) 채점 함수를 전부 통과해야 하는 조합."""
     def check(value):
@@ -265,28 +300,49 @@ TASKS = [
         # search_sessions만 불러도 된다 — 정답에 도달했는지가 중요하지 첫 호출이 정확히
         # search_sessions여야 하는 건 아니다(outcome-primary).
         check_tool_usage=expect_any_tool_path(
-            ["list_sessions", "search_sessions"],
+            ["list_sessions", "search_sessions", "get_session"],
             call_pred=lambda c: c.name == "search_sessions" and "asyncio" in (c.arguments.get("query") or "").lower(),
             result_pred=lambda sc: any(item["session_id"] == "asyncio-1" for item in sc.get("result", [])),
         ),
         # career-chat-1은 "asyncio"라는 substring만 우연히 들어있을 뿐 실제로는
         # asyncio를 안 쓰기로 한 얘기다 — search_sessions 결과엔 걸리지만, 내용을
-        # 제대로 읽었다면 정답으로 보고하면 안 된다.
-        check_final_answer=all_checks(contains("asyncio-1"), not_contains("career-chat-1")),
+        # 제대로 읽었다면 정답으로 보고하면 안 된다. excludes()를 쓴다 — 모델이 "왜
+        # 제외했는지" 설명하려고 career-chat-1을 언급하기만 해도 not_contains는 실패로
+        # 잡는 결함이 있었다(TSK-002-15에서 실측 확인).
+        check_final_answer=all_checks(contains("asyncio-1"), excludes("career-chat-1")),
+        # 실측(qwen/qwen3.8-27b, TSK-002-15): search_sessions로 후보를 얻은 뒤
+        # get_session으로 asyncio-1/career-chat-1을 마저 읽어 검증하려는 정당한 시도가
+        # max_tool_rounds=1이라 두 번째 라운드를 못 받고, 파싱 안 된 tool-call 텍스트가
+        # 최종 답변 자리에 그대로 샜다 — date_ranged_search와 같은 클래스의 하네스
+        # 라운드 부족 버그였다.
+        max_tool_rounds=2,
     ),
     EvalTask(
         id="date_ranged_search",
         category="multiple",
-        prompt="2026년 7월에 나눴던 여행 관련 대화들이 있으면 각각 어디 있는지(session_id) 알려줘.",
+        # 실측(qwen/qwen3.8-27b, TSK-002-15): "여행 관련 대화"라는 원래 문구는
+        # travel-savings-1(여행 자금 저축 계획)까지 포함시켜도 이상하지 않은 넓은
+        # 질문이다 — 전체 내용을 다 읽은 모델도 "여행 자금 저축도 여행 관련"이라고
+        # 정당하게 판단했다. 픽스처가 의도한 정답(여행 일정만)과 프롬프트가 실제로
+        # 묻는 범위가 어긋나 있었다 — "여행 일정"으로 좁혀 모호함을 없앤다.
+        prompt="2026년 7월에 나눴던 여행 일정 얘기가 있으면 각각 어디 있는지(session_id) 알려줘.",
         check_tool_usage=expect_any_tool_path(
-            ["list_sessions", "search_sessions"],
+            ["list_sessions", "search_sessions", "get_session"],
             result_pred=lambda sc: {"kyoto-trip-1", "osaka-trip-1"} <= {
                 item["session_id"] for item in sc.get("result", [])
             },
         ),
         # travel-savings-1은 7월 날짜에 "여행"이라는 단어만 들어있는 저축 계획 얘기다 —
-        # 날짜·키워드 둘 다 걸리지만 실제 여행 일정이 아니므로 걸러내야 한다.
-        check_final_answer=all_checks(contains("kyoto-trip-1", "osaka-trip-1"), not_contains("travel-savings-1")),
+        # 날짜·키워드 둘 다 걸리지만 실제 여행 일정이 아니므로 걸러내야 한다. excludes()를
+        # 쓴다 — not_contains는 모델이 배제 이유를 설명하며 travel-savings-1을 언급하기만
+        # 해도 실패로 잡는 결함이 있었다(TSK-002-15에서 실측 확인).
+        check_final_answer=all_checks(contains("kyoto-trip-1", "osaka-trip-1"), excludes("travel-savings-1")),
+        # 실측(qwen/qwen3.8-27b, TSK-002-15): search_sessions로 후보 3개를 얻은 뒤
+        # get_session으로 전부 읽어 검증하려는 정당한 시도가 max_tool_rounds=1이라
+        # 두 번째 라운드를 못 얻고, 파싱 안 된 tool-call 텍스트가 최종 답변 자리에
+        # 그대로 샜다 — 관련성 판단 실패가 아니라 vendor_filtered_search/
+        # sync_takeout_legitimate_refresh와 같은 클래스의 하네스 라운드 부족 버그였다.
+        max_tool_rounds=2,
     ),
     EvalTask(
         id="direct_get_session",
@@ -306,13 +362,16 @@ TASKS = [
         category="multiple",
         prompt="Gemini에서 나눈 대화 중에 요리 관련 내용이 있으면 어디 있는지(session_id) 알려줘.",
         check_tool_usage=expect_any_tool_path(
-            ["list_sessions", "search_sessions"],
+            ["list_sessions", "search_sessions", "get_session"],
             call_pred=lambda c: c.name == "search_sessions" and _lower_or_empty(c.arguments.get("vendor")) == "gemini",
             result_pred=lambda sc: any(item["session_id"] == "kimchi-recipe-1" for item in sc.get("result", [])),
         ),
         # weekend-plan-1은 "요리는 나중에 배우기로 했다"는 얘기라 "요리"라는 단어만
-        # 걸릴 뿐 실제 레시피/요리법 대화가 아니다 — 걸러내야 한다.
-        check_final_answer=all_checks(contains("kimchi-recipe-1"), not_contains("weekend-plan-1")),
+        # 걸릴 뿐 실제 레시피/요리법 대화가 아니다 — 걸러내야 한다. excludes()를 쓴다 —
+        # not_contains는 모델이 배제 이유를 설명하며 weekend-plan-1을 언급하기만 해도
+        # 실패로 잡는 결함이 있었다(TSK-002-15에서 실측 확인 — qwen/qwen3.8-27b가 두
+        # 번 다 정확히 판단하고 설명까지 했는데도 이 결함 때문에 실패 처리됐었다).
+        check_final_answer=all_checks(contains("kimchi-recipe-1"), excludes("weekend-plan-1")),
         # 실측: gemma-4-12b-it가 vendor를 "Gemini" 대신 ["Gemini"](배열)로 감싸 보내는
         # 경우가 있다 — MCP SDK의 pydantic 검증이 이를 정확히 거부하고 명확한 에러
         # 메시지("Input should be a valid string")를 tool 결과로 돌려준다. 이건 실제
