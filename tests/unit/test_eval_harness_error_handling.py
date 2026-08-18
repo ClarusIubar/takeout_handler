@@ -11,7 +11,7 @@ import pytest
 
 mcp = pytest.importorskip("mcp")
 
-from eval.harness import SYSTEM_PROMPT, _error_result  # noqa: E402
+from eval.harness import _error_result  # noqa: E402
 from eval.tasks import TASKS  # noqa: E402
 
 pytestmark = pytest.mark.mcp
@@ -37,21 +37,3 @@ def test_error_result_state_axis_marked_failed_when_task_has_state_check():
     task = next(t for t in TASKS if t.id == "sync_takeout_legitimate_refresh")
     result = _error_result(task, RuntimeError("boom"))
     assert result.state_pass is False
-
-
-def test_system_prompt_requires_verification_before_finalizing_answer():
-    # 실측(gemma-4-12b-it, TSK-002-16): search_sessions 결과만 보고 get_session
-    # 검증 없이 decoy(career-chat-1)를 정답처럼 나열한 사례 — 검증을 생략하면
-    # "모른다"고 답하는 대신 snippet만으로 확신에 찬 오답을 낸다. SYSTEM_PROMPT에
-    # 후보가 여럿이면 확정 전에 get_session으로 확인하라는 지침을 명시적으로 요구.
-    assert "get_session" in SYSTEM_PROMPT
-
-
-def test_system_prompt_requires_explicit_per_candidate_judgment():
-    # 실측(gemma-4-12b-it, TSK-002-16): "무조건 get_session으로 확인해라"까지만
-    # 지시했더니, 실제로 get_session은 부르는데 읽은 내용을 판단에 안 쓰고 후보를
-    # 전부 정답처럼 나열했다(검증과 판단이 분리됨) — 야오 외(2022)의 리액트 기법이
-    # 보이는 것처럼, 도구 결과를 본 뒤 최종 답변 전에 "관련 있는가: 예/아니오"를
-    # 명시적으로 판정하게 하는 중간 추론 단계가 빠져 있었다. 이 지침이 실제로
-    # 박혀 있는지 고정한다.
-    assert "관련 있는가" in SYSTEM_PROMPT

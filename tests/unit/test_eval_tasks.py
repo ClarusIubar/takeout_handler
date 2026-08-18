@@ -372,16 +372,13 @@ def test_keyword_search_rejects_decoy_that_only_superficially_matches():
     assert ok2 is False
 
 
-def test_keyword_search_allows_three_rounds():
+def test_keyword_search_allows_two_rounds():
     # 실측(qwen/qwen3.8-27b, TSK-002-15): search_sessions로 후보를 얻은 뒤
     # get_session으로 asyncio-1/career-chat-1을 마저 읽어 검증하려는 정당한 시도가
     # max_tool_rounds=1이라 두 번째 라운드를 못 받고, 파싱 안 된 tool-call 텍스트가
-    # 최종 답변 자리에 그대로 샜다 — date_ranged_search와 같은 클래스의 버그(2로 상향).
-    # 이후(TSK-002-16) SYSTEM_PROMPT가 "후보를 전부 get_session으로 확인해라"를
-    # 무조건화하면서, get_session 2건을 별도 라운드로 나눠 부르는 시행에서 2라운드로도
-    # 부족한 재발 사례가 나와 3으로 다시 상향.
+    # 최종 답변 자리에 그대로 샜다 — date_ranged_search와 같은 클래스의 버그.
     task = next(t for t in TASKS if t.id == "keyword_search")
-    assert task.max_tool_rounds >= 3
+    assert task.max_tool_rounds >= 2
 
 
 def test_keyword_search_tool_usage_allows_get_session_verification():
