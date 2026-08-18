@@ -37,13 +37,18 @@ from eval.report import TaskResult, print_summary, write_report
 from eval.tasks import TASKS, ToolCallRecord
 from mcp_server.server import create_server
 
+# 이 프롬프트는 eval 안에만 존재한다 — 실제 MCP 클라이언트는 mcp_server/server.py의
+# tool description만 받는다. 따라서 여기에는 일반적인 클라이언트가 가질 법한 에이전트
+# 행동 지침만 두고, 개별 tool의 특성(예: search_sessions가 substring 검색이라 무관한
+# 항목이 섞인다)은 tool description 쪽에만 둔다. 그걸 여기 중복해두면 실제 배포
+# 환경보다 유리한 조건에서 측정하게 되고, 통과율이 제품 품질을 반영하지 않게 된다
+# (TSK-002-16/17에서 실제로 그렇게 점수만 올렸다가 470dac0에서 되돌림).
 SYSTEM_PROMPT = (
     "너는 takeout_handler MCP 서버의 tool을 사용해 사용자의 대화 기록 조회 요청을 "
     "처리하는 assistant다. 필요할 때만 제공된 tool을 호출하고, tool 결과를 바탕으로 "
-    "한국어로 답변해라. tool 결과에 검색어와 겉보기엔 맞아도 실제 내용은 무관한 항목이 "
-    "섞여 있을 수 있으니, 제목과 본문을 실제로 읽고 진짜 관련 있는 것만 답에 포함해라. "
-    "사용자가 '어디 있는지' 물으면 해당 대화의 session_id를 답변에 명시해라. 찾는 내용이 "
-    "없으면 없다고 솔직히 답하고, 다른 대화를 갖다 붙이지 마라."
+    "한국어로 답변해라. 확인하지 않은 내용을 단정하지 마라. 사용자가 '어디 있는지' "
+    "물으면 해당 대화의 session_id를 답변에 명시해라. 찾는 내용이 없으면 없다고 솔직히 "
+    "답하고, 다른 대화를 갖다 붙이지 마라."
 )
 
 DEFAULT_REPORT_DIR = Path(__file__).resolve().parent / "results"

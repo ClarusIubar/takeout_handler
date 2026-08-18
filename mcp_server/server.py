@@ -77,7 +77,11 @@ def create_server(result_dir, data_dirs=None, name="takeout-handler"):
         언급하면 그걸 vendor 파라미터에 반영해서 검색 범위를 좁혀라. matched_snippet은
         문맥 확인용 짧은 미리보기일 뿐 전체 내용이 아니다 — 사용자가 정확한/전체
         내용(예: 체크리스트 항목, 구체적인 수치)을 원하면 snippet만으로 답하지 말고
-        session_id로 get_session을 마저 호출해 전체 turn을 읽어라."""
+        session_id로 get_session을 마저 호출해 전체 turn을 읽어라. 마찬가지로, 결과가
+        여러 건이라 어느 것이 실제로 사용자의 질문과 관련 있는지 판단해야 할 때도
+        snippet만 보고 단정하지 말고 get_session으로 전체 내용을 확인한 뒤에 판단해라 —
+        snippet은 매치된 부분 주변만 잘라낸 것이라, 그것만으로는 그 대화가 정말 그
+        주제를 다룬 것인지 스쳐 지나간 언급인지 구분되지 않는 경우가 많다."""
         results = index.search_sessions(query, vendor=vendor, date_from=date_from, date_to=date_to, limit=limit)
         return [{**_session_summary(s), "matched_snippet": snippet} for s, snippet in results]
 
